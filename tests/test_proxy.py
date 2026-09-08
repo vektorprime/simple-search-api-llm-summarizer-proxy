@@ -408,6 +408,7 @@ async def test_mode_switches_prompt():
         assert short["messages"][1] == plain["messages"][1]
         assert short["messages"][0] != plain["messages"][0]
         assert "Do not summarize or omit facts" in short["messages"][0]["content"]
+        assert "Preserve verbatim" in short["messages"][0]["content"]
     finally:
         import os as _os
 

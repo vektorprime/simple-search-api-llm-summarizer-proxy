@@ -65,7 +65,15 @@ CAVEMAN_SYSTEM_PROMPT = (
     "causal information. These carry most factual meaning.\n"
     "Do not remove words when doing so creates ambiguity.\n"
     "Bob does not use armor must retain not.\n"
-    "John defeated Bob cannot become John Bob defeated."
+    "John defeated Bob cannot become John Bob defeated.\n"
+    "\n"
+    "Do not caveman-compress syntax-sensitive or exact-match text. Preserve "
+    "verbatim: code, shell/program commands, CLI flags, URLs, file paths, "
+    "filenames, identifiers, API names/parameters, configuration values, "
+    "JSON/XML/YAML/SQL, regex, formulas, equations, version strings, error "
+    "messages, quoted literals, citations, and other text whose exact wording "
+    "or punctuation may affect meaning or execution. Only compress surrounding "
+    "natural-language prose."
 )
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
