@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SSALMP Admin</title>
+<style>
+:root{
+  --bg:#f3f5f9; --card:#ffffff; --ink:#1c2333; --muted:#687182;
+  --line:#e2e7f0; --accent:#2563eb; --accent-d:#1d4ed8;
+  --ok-bg:#e7f6ec; --ok-ink:#157347; --ok-line:#bfe6cc;
+  --err-bg:#fdecec; --err-ink:#b42318; --err-line:#f5c6c0;
+  --info-bg:#e8f0fe; --info-ink:#1a56db; --info-line:#c4d7fc;
+}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);margin:0;padding:0 1rem 4rem}
+.wrap{max-width:880px;margin:0 auto}
+header.top{display:flex;align-items:center;gap:.7rem;margin:1.6rem 0 1rem}
+header.top h1{font-size:1.5rem;margin:0}
+.dot{width:.7rem;height:.7rem;border-radius:50%;background:#cbd5e1;display:inline-block}
+.dot.ok{background:#22c55e}.dot.bad{background:#ef4444}
+#health{color:var(--muted);font-size:.9rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.2rem;margin:0 0 1rem;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+.card h2{font-size:1.05rem;margin:.1rem 0 .8rem;display:flex;align-items:center;gap:.5rem}
+.card h2 .tag{font-size:.72rem;font-weight:600;color:var(--muted);background:#eef2f7;border-radius:99px;padding:.15rem .6rem}
+.card p.desc{color:var(--muted);font-size:.88rem;margin:.2rem 0 .9rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:.8rem 1rem}
+@media (max-width:640px){.grid{grid-template-columns:1fr}}
+.field label{display:block;font-weight:600;font-size:.86rem;margin-bottom:.25rem;cursor:help}
+.field label code{font-weight:600}
+.info{display:inline-block;width:1rem;height:1rem;line-height:1rem;text-align:center;font-size:.7rem;font-weight:700;color:var(--accent);border:1px solid var(--accent);border-radius:50%;margin-left:.35rem;cursor:help;vertical-align:1px}
+.field .hint{font-size:.78rem;color:var(--muted);margin-top:.25rem}
+.field input{width:100%;padding:.55rem .65rem;font-size:.95rem;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}
+.field input:focus{outline:2px solid var(--accent);border-color:var(--accent);background:#fff}
+.field input[readonly]{background:#eef2f7;color:var(--muted)}
+.field input:disabled{background:#eef2f7;color:#9aa3b2;cursor:not-allowed}
+.field input[type=checkbox]{width:1.15rem;height:1.15rem;accent-color:var(--accent);cursor:pointer}
+.field select{width:100%;padding:.55rem .65rem;font-size:.95rem;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}
+.actions{position:sticky;bottom:0;display:flex;gap:.6rem;align-items:center;background:rgba(255,255,255,.96);border:1px solid var(--line);border-radius:12px;padding:.7rem .9rem;margin:0 0 1rem}
+button{font-size:.95rem;border-radius:8px;padding:.6rem 1.2rem;cursor:pointer;border:1px solid transparent}
+button.primary{background:var(--accent);color:#fff;font-weight:600}
+button.primary:hover{background:var(--accent-d)}
+button.primary:disabled{opacity:.6;cursor:wait}
+button.ghost{background:#fff;border-color:var(--line);color:var(--ink)}
+button.ghost:hover{background:#f1f5f9}
+button.small{padding:.35rem .8rem;font-size:.85rem}
+#msg{flex:1;font-size:.88rem;border-radius:8px;padding:.5rem .8rem;display:none}
+#msg.show{display:block}
+#msg.ok{background:var(--ok-bg);color:var(--ok-ink);border:1px solid var(--ok-line)}
+#msg.err{background:var(--err-bg);color:var(--err-ink);border:1px solid var(--err-line)}
+#msg.info{background:var(--info-bg);color:var(--info-ink);border:1px solid var(--info-line)}
+code.pill{background:#eef2f7;border:1px solid var(--line);border-radius:6px;padding:.15rem .5rem;font-size:.88rem;word-break:break-all}
+ol.steps{margin:.4rem 0 .2rem;padding-left:1.3rem;font-size:.92rem}
+ol.steps li{margin:.3rem 0}
+.urlrow{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+pre{background:#0f172a;color:#e2e8f0;padding:1rem;border-radius:10px;white-space:pre-wrap;font-size:.82rem;max-height:420px;overflow:auto}
+.result{border:1px solid var(--line);border-radius:8px;padding:.6rem .8rem;margin:.5rem 0;background:#fbfcfe}
+.result a{color:var(--accent);font-weight:600;text-decoration:none}
+.result .snip{font-size:.86rem;color:#334155;margin-top:.3rem;white-space:pre-wrap}
+.compare{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin-top:.6rem}
+@media (max-width:640px){.compare{grid-template-columns:1fr}}
+.pane{border:1px solid var(--line);border-radius:8px;padding:.6rem .8rem;background:#fff;min-width:0}
+.pane h3{font-size:.82rem;margin:.1rem 0 .5rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.pane h3 .cnt{text-transform:none;letter-spacing:0}
+.pane .body{font-size:.85rem;color:#334155;white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto}
+.pane ul{margin:.3rem 0;padding-left:1.1rem;font-size:.85rem;color:#334155}
+.pane ul li{margin:.25rem 0}
+.badge{display:inline-block;font-size:.72rem;font-weight:700;border-radius:99px;padding:.12rem .55rem;margin-left:.4rem;vertical-align:1px}
+.badge.llm{background:var(--ok-bg);color:var(--ok-ink);border:1px solid var(--ok-line)}
+.badge.highlights{background:#fef6e7;color:#975a16;border:1px solid #f3ddae}
+.badge.text{background:#eef2f7;color:var(--muted);border:1px solid var(--line)}
+.badge.empty{background:var(--err-bg);color:var(--err-ink);border:1px solid var(--err-line)}
+.rowflex{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
+.rowflex input[type=text]{flex:3;min-width:200px;padding:.55rem .65rem;font-size:.95rem;border:1px solid var(--line);border-radius:8px}
+.rowflex input[type=number]{flex:0 0 90px;padding:.55rem .65rem;font-size:.95rem;border:1px solid var(--line);border-radius:8px}
+footer{color:var(--muted);font-size:.8rem;text-align:center;margin-top:1.5rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span class="dot" id="dot"></span>
+    <h1>SSALMP Admin</h1>
+    <span id="health">connecting…</span>
+  </header>
+
+  <div class="card">
+    <h2>Connect to OpenWebUI</h2>
+    <ol class="steps">
+      <li>OpenWebUI → <b>Admin Panel → Settings → Web Search</b></li>
+      <li>Enable Web Search: <b>on</b> · Engine: <b>external</b></li>
+      <li>External Search URL:
+        <span class="urlrow"><code class="pill" id="owui_url">…</code>
+        <button class="ghost small" onclick="copyUrl(this)">Copy</button></span>
+      </li>
+      <li>External Search API Key: <b>anything</b> (this proxy accepts any key)</li>
+    </ol>
+  </div>
+
+  <div id="form"></div>
+  <datalist id="llm_models_list"></datalist>
+
+  <div class="actions">
+    <button class="primary" id="btnSave" onclick="save()">Save</button>
+    <button class="ghost" id="btnReload" onclick="load(true)">Reload</button>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Test search <span class="tag">raw result vs summary</span></h2>
+    <p class="desc">Runs the full pipeline and shows, side by side, the raw search API result (left) and the summary returned to OpenWebUI (right).</p>
+    <div class="rowflex">
+      <input type="text" id="q" value="What is the Eiffel Tower?"/>
+      <input type="number" id="n" value="2" min="1" max="10"/>
+      <button class="primary" id="btnTest" onclick="test()">Run</button>
+    </div>
+    <div id="results"></div>
+  </div>
+
+  <footer>Secrets stay masked · leave a secret field empty to keep its value · login via HTTP Basic (<code>ADMIN_USER</code>/<code>ADMIN_PASS</code>)</footer>
+</div>
+
+<script>
+"use strict";
+// Grouped settings schema: key -> {label, hint, secret}
+const GROUPS = [
+  {title:"Search API", tag:"search provider", desc:"Where results and page text come from (current provider: Exa).", fields:{
+    EXA_API_KEY:{label:"Search API key", hint:"Required. Key for the configured search provider.", secret:true},
+    EXA_BASE_URL:{label:"Search base URL", hint:"Base URL of the search provider."}
+  }},
+  {title:"Summarizer (local LLM)", tag:"LLM backend", desc:"OpenAI-compatible endpoint that writes the detailed summaries.", fields:{
+    LLM_PROVIDER:{label:"LLM API provider", hint:"Which backend serves the summaries. Slot pinning below applies to llama.cpp only.", type:"select", options:[["llamacpp","llama.cpp"],["vllm","vLLM"],["sglang","SGLang"]]},
+    LLM_BASE_URL:{label:"LLM base URL", hint:"e.g. http://10.0.0.187:8005/v1"},
+    LLM_MODEL:{label:"LLM model", hint:"Must match a backend model id. Use Detect (or start typing) to list what the backend serves.", secret:false},
+    LLM_API_KEY:{label:"LLM API key", hint:"Sent as Bearer if the backend needs one.", secret:true},
+    LLM_MAX_TOKENS:{label:"Max tokens / summary", hint:"0 or empty = unlimited (omit limit). If set, keep ≥1500 — reasoning tokens come out of this budget.", type:"number"},
+    CAVEMAN_STYLE:{label:"Summarize in caveman style", hint:"Tiny terse summaries, fewer tokens. Uses the caveman instruction set.", type:"checkbox"},
+    LLAMACPP_USE_SLOTS:{label:"Use slots (pin job to a slot)", hint:"llama.cpp only: send id_slot so the job lands on a specific slot instead of any idle one.", type:"checkbox"},
+    LLAMACPP_SLOT_ID:{label:"Slot ID", hint:"Whole number, 1 or above. Server slots are 0-based and wrap (e.g. 4 → slot 0 with 4 slots).", type:"number", min:1}
+  }},
+  {title:"Timeouts", tag:"seconds", desc:"How long the proxy waits before falling back.", fields:{
+    LLM_TIMEOUT_SEC:{label:"Per-summary timeout", hint:"Single LLM call. Large reasoning models are slow.", type:"number"},
+    EXA_TIMEOUT_SEC:{label:"Search timeout", hint:"Single search API call.", type:"number"},
+    REQUEST_TIMEOUT_SEC:{label:"Whole-search timeout", hint:"Includes queue wait when jobs stack up.", type:"number"}
+  }},
+  {title:"Content limits & queueing", tag:"sizes", desc:"Payload sizes and how many summaries run at once.", fields:{
+    EXA_TEXT_MAX_CHARS:{label:"Result text chars", hint:"Characters of page text requested per result from the search API.", type:"number"},
+    SUMMARY_INPUT_MAX_CHARS:{label:"Text chars to LLM", hint:"Page characters forwarded to the LLM API backend per summary.", type:"number"},
+    MAX_CONCURRENT_SUMMARIES:{label:"Concurrent summaries", hint:"1 = single-flight (recommended on 2× GPUs). Rest queue.", type:"number"}
+  }},
+  {title:"Access", tag:"auth", desc:"Who may use the proxy and this page.", fields:{
+    PROXY_API_KEY:{label:"Proxy API key", hint:"Display only — /search accepts ANY key (or none).", secret:true},
+    PORT:{label:"Port", hint:"Read-only here; set via env / compose.", readonly:true}
+  }}
+];
+const ORDER = [];
+GROUPS.forEach(g => Object.keys(g.fields).forEach(k => ORDER.push(k)));
+
+function now(){ return new Date().toLocaleTimeString(); }
+function say(kind, text){
+  const m = document.getElementById('msg');
+  m.className = 'show ' + kind;
+  m.textContent = (kind==='ok' ? '✓ ' : kind==='err' ? '✗ ' : '• ') + text + ' (' + now() + ')';
+}
+function setBusy(busy){
+  document.getElementById('btnSave').disabled = busy;
+  document.getElementById('btnReload').disabled = busy;
+  document.getElementById('btnSave').textContent = busy ? 'Saving…' : 'Save';
+}
+
+function searchUrl(){ return window.location.origin + '/search'; }
+function copyUrl(btn){
+  navigator.clipboard.writeText(searchUrl()).then(()=>{
+    const old = btn.textContent; btn.textContent = 'Copied!';
+    setTimeout(()=>{ btn.textContent = old; }, 1500);
+  });
+}
+
+async function health(){
+  try{
+    const r = await fetch('/healthz'); const h = await r.json();
+    document.getElementById('dot').className = 'dot ok';
+    document.getElementById('health').textContent =
+      'healthy · ' + h.llm_model + ' · Search API ' + (h.exa_configured ? 'configured' : 'NOT configured');
+    if(!h.exa_configured) say('err', 'Search API key is not set — searches will return empty.');
+  }catch(e){
+    document.getElementById('dot').className = 'dot bad';
+    document.getElementById('health').textContent = 'unreachable';
+  }
+}
+
+function buildForm(cfg){
+  const host = document.getElementById('form'); host.innerHTML = '';
+  GROUPS.forEach(g => {
+    const card = document.createElement('div'); card.className = 'card';
+    const h = document.createElement('h2'); h.textContent = g.title + ' ';
+    const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = g.tag;
+    h.appendChild(tag); card.appendChild(h);
+    const d = document.createElement('p'); d.className = 'desc'; d.textContent = g.desc;
+    card.appendChild(d);
+    const grid = document.createElement('div'); grid.className = 'grid';
+    Object.entries(g.fields).forEach(([key, meta]) => {
+      if(!(key in cfg)) return;
+      const wrap = document.createElement('div'); wrap.className = 'field'; wrap.id = 'row_' + key;
+      const lab = document.createElement('label');
+      const code = document.createElement('code'); code.textContent = meta.label || key;
+      lab.appendChild(code);
+      if(meta.hint){
+        lab.title = meta.hint; // hover tooltip on the label
+        const info = document.createElement('span'); info.className = 'info'; info.textContent = 'i';
+        info.title = meta.hint; // hover tooltip on the icon
+        lab.appendChild(info);
+      }
+      wrap.appendChild(lab);
+      let inp;
+      if(meta.type === 'select'){
+        inp = document.createElement('select');
+        (meta.options || []).forEach(([val, txt]) => {
+          const o = document.createElement('option'); o.value = val; o.textContent = txt;
+          if(String(cfg[key]).toLowerCase() === val) o.selected = true;
+          inp.appendChild(o);
+        });
+        inp.addEventListener('change', refreshLlamaCpp);
+      } else if(meta.type === 'checkbox'){
+        inp = document.createElement('input'); inp.type = 'checkbox';
+        inp.checked = cfg[key] === true || String(cfg[key]).toLowerCase() === 'true';
+        inp.addEventListener('change', refreshLlamaCpp);
+      } else {
+        inp = document.createElement('input');
+        if(meta.type === 'number'){ inp.type = 'number'; if(meta.min !== undefined) inp.min = meta.min; inp.step = 1; }
+        if(meta.readonly) inp.readOnly = true;
+        if(meta.secret){ inp.value = ''; inp.placeholder = 'current: ' + cfg[key] + ' (empty = keep)'; inp.autocomplete = 'off'; }
+        else inp.value = cfg[key];
+      }
+      inp.id = 'cfg_' + key; inp.name = key;
+      wrap.appendChild(inp);
+      if(key === 'LLM_MODEL'){
+        inp.setAttribute('list', 'llm_models_list');
+        const det = document.createElement('button');
+        det.type = 'button'; det.className = 'ghost small'; det.textContent = 'Detect';
+        det.title = 'Query the LLM backend for available model ids';
+        det.style.marginTop = '.35rem';
+        det.onclick = () => detectModels(false);
+        wrap.appendChild(det);
+      }
+      if(meta.hint){ const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = meta.hint; wrap.appendChild(hint); }
+      grid.appendChild(wrap);
+    });
+    card.appendChild(grid); host.appendChild(card);
+  });
+  refreshLlamaCpp();
+}
+
+// llama.cpp slot controls only make sense for the llama.cpp provider:
+// the "use slots" row shows only then, and the slot number box is
+// enabled only while "use slots" is checked.
+function refreshLlamaCpp(){
+  const prov = document.getElementById('cfg_LLM_PROVIDER');
+  const box = document.getElementById('cfg_LLAMACPP_USE_SLOTS');
+  const num = document.getElementById('cfg_LLAMACPP_SLOT_ID');
+  if(!prov || !box || !num) return;
+  const isLlama = prov.value === 'llamacpp';
+  document.getElementById('row_LLAMACPP_USE_SLOTS').style.display = isLlama ? '' : 'none';
+  document.getElementById('row_LLAMACPP_SLOT_ID').style.display = isLlama ? '' : 'none';
+  num.disabled = !box.checked;
+}
+
+async function load(manual){
+  if(manual){ setBusy(true); say('info', 'Reloading configuration…'); }
+  try{
+    document.getElementById('owui_url').textContent = searchUrl();
+    const r = await fetch('/config');
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    buildForm(await r.json());
+    if(manual) say('ok', 'Configuration reloaded from server.');
+  }catch(e){ say('err', 'Reload failed: ' + e.message); }
+  finally{ if(manual) setBusy(false); }
+}
+
+async function save(){
+  setBusy(true); say('info', 'Saving…');
+  const body = {};
+  ORDER.forEach(k => {
+    const el = document.getElementById('cfg_' + k);
+    if(!el || el.readOnly || el.disabled) return;
+    body[k] = el.type === 'checkbox' ? String(el.checked) : el.value;
+  });
+  // empty secrets = keep current server-side too, but drop them for clarity
+  ['EXA_API_KEY','PROXY_API_KEY','LLM_API_KEY'].forEach(k => { if(!body[k]) delete body[k]; });
+  try{
+    const r = await fetch('/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+    const applied = data.applied || [];
+    await load(false);
+    // re-mask secret inputs after rebuild
+    if(applied.length) say('ok', 'Saved — applied: ' + applied.join(', ') + '.');
+    else say('info', 'Saved — no changes (values identical or secrets left empty).');
+  }catch(e){ say('err', 'Save failed: ' + e.message); }
+  finally{ setBusy(false); }
+}
+
+// Autodetect model ids from the LLM backend (llama.cpp / vLLM / SGLang
+// all serve OpenAI-compatible GET /v1/models, proxied via /llm/models).
+// Fills the LLM-model suggestions; only fills the field itself when empty.
+async function detectModels(quiet){
+  try{
+    const r = await fetch('/llm/models');
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+    const list = document.getElementById('llm_models_list');
+    list.innerHTML = '';
+    (data.models || []).forEach(id => {
+      const o = document.createElement('option'); o.value = id;
+      list.appendChild(o);
+    });
+    const inp = document.getElementById('cfg_LLM_MODEL');
+    if(inp && !inp.value && data.models && data.models.length) inp.value = data.models[0];
+    if(!quiet){
+      if(data.models && data.models.length) say('ok', 'Detected ' + data.models.length + ' model(s) from ' + data.base_url + '.');
+      else say('info', 'Backend answered but listed no models.');
+    }
+  }catch(e){ if(!quiet) say('err', 'Model detect failed: ' + e.message); }
+}
+
+async function test(){
+  const btn = document.getElementById('btnTest');
+  const box = document.getElementById('results');
+  btn.disabled = true; btn.textContent = 'Running… (summaries take ~30s each)';
+  box.innerHTML = '';
+  const t0 = Date.now();
+  try{
+    const r = await fetch('/debug/search', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({query:document.getElementById('q').value, count:parseInt(document.getElementById('n').value||'2',10)})});
+    const payload = await r.json();
+    if(!r.ok) throw new Error(payload.detail || ('HTTP ' + r.status));
+    const data = payload.results || [];
+    const secs = ((Date.now()-t0)/1000).toFixed(0);
+    say('ok', 'Test search finished: ' + data.length + ' result(s) in ' + secs + 's.');
+    const srcName = {llm:'LLM summary', highlights:'Search highlights (LLM fallback)', text:'Search text (LLM fallback)', empty:'empty'};
+    data.forEach(item => {
+      const card = document.createElement('div'); card.className = 'result';
+      const title = document.createElement('div');
+      const a = document.createElement('a'); a.href = item.link; a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = item.title || item.link; title.appendChild(a);
+      const badge = document.createElement('span'); badge.className = 'badge ' + item.snippet_source;
+      badge.title = 'Which source filled the snippet sent to OpenWebUI';
+      badge.textContent = srcName[item.snippet_source] || item.snippet_source;
+      title.appendChild(badge); card.appendChild(title);
+
+      const cmp = document.createElement('div'); cmp.className = 'compare';
+      // LEFT: raw search API result
+      const left = document.createElement('div'); left.className = 'pane';
+      const lh = document.createElement('h3');
+      const exaText = item.exa_text || '';
+      lh.textContent = 'Search API result ';
+      const lcnt = document.createElement('span'); lcnt.className = 'cnt';
+      lcnt.textContent = '· ' + exaText.length.toLocaleString() + ' chars';
+      lh.appendChild(lcnt); left.appendChild(lh);
+      const lb = document.createElement('div'); lb.className = 'body';
+      const exaShown = exaText || '(no text returned by search API)';
+      lb.textContent = exaShown.length > 2500 && exaText ? exaShown.slice(0,2500) + '… [' + exaText.length + ' chars total]' : exaShown;
+      left.appendChild(lb);
+      if(item.exa_highlights && item.exa_highlights.length){
+        const ul = document.createElement('ul');
+        item.exa_highlights.forEach(h => { const li = document.createElement('li'); li.textContent = h; ul.appendChild(li); });
+        left.appendChild(ul);
+      }
+      // RIGHT: summary. With caveman mode on this is the normal-style
+      // comparison; otherwise it is the snippet actually sent to OpenWebUI.
+      const right = document.createElement('div'); right.className = 'pane';
+      const rh = document.createElement('h3');
+      const showCaveman = item.comparison_summary != null;
+      const rightText = showCaveman ? item.comparison_summary : (item.snippet || '');
+      rh.textContent = showCaveman ? 'Summary (normal) ' : 'Summary → OpenWebUI (snippet) ';
+      const rcnt = document.createElement('span'); rcnt.className = 'cnt';
+      rcnt.textContent = '· ' + rightText.length.toLocaleString() + ' chars';
+      rh.appendChild(rcnt); right.appendChild(rh);
+      const rb = document.createElement('div'); rb.className = 'body';
+      rb.textContent = rightText || '(empty)';
+      right.appendChild(rb);
+
+      cmp.appendChild(left); cmp.appendChild(right); card.appendChild(cmp);
+      // BOTTOM (caveman mode only): the caveman summary actually sent.
+      if(showCaveman){
+        const bottom = document.createElement('div'); bottom.className = 'pane'; bottom.style.marginTop = '.8rem';
+        const bh = document.createElement('h3');
+        const snipText = item.snippet || '';
+        bh.textContent = 'Caveman summary → OpenWebUI (snippet) ';
+        const bcnt = document.createElement('span'); bcnt.className = 'cnt';
+        bcnt.textContent = '· ' + snipText.length.toLocaleString() + ' chars';
+        bh.appendChild(bcnt); bottom.appendChild(bh);
+        const bb = document.createElement('div'); bb.className = 'body';
+        bb.textContent = snipText || '(empty)';
+        bottom.appendChild(bb); card.appendChild(bottom);
+      }
+      box.appendChild(card);
+    });
+    if(!data.length) box.innerHTML = '<div class="result">No results (check search API key / proxy logs).</div>';
+  }catch(e){ say('err', 'Test search failed: ' + e.message); }
+  finally{ btn.disabled = false; btn.textContent = 'Run'; }
+}
+
+health();
+load(false).then(() => detectModels(true));
+</script>
+</body>
+</html>

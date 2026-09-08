@@ -1,0 +1,29 @@
+services:
+  ssalmp:
+    build: .
+    image: ssalmp:latest
+    container_name: ssalmp
+    ports:
+      - "8555:8555"
+    # Secrets / first-run values. Missing file is fine (all have defaults
+    # except EXA_API_KEY, which you can also set later in the admin UI).
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: "8555"
+      # Durable config: every change in /admin is written here and survives
+      # container restarts/upgrades via the named volume below.
+      CONFIG_FILE: "/data/config.json"
+    volumes:
+      - ssalmp-config:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8555/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  ssalmp-config:
