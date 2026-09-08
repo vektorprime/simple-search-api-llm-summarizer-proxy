@@ -147,10 +147,6 @@ def build_user_prompt(
             "Task: Summarize the page content above in detail. "
             "Focus on relevance to the search query where applicable."
         )
-        task = (
-            "Task: Summarize the page content above in detail. "
-            "Focus on relevance to the search query where applicable."
-        )
     return (
         f"Search query: {query}\n"
         f"Page title: {title or 'n/a'}\n"
