@@ -1,13 +1,12 @@
 # SSALMP — Simple Search API LLM Summarizer Proxy
 
-Proxy between **OpenWebUI** (engine `external`) and a **search API** (Exa by
-default) that returns **detailed LLM summaries** in `snippet` instead of raw
-page text.
+Proxy between OpenWebUI (engine external) and a search API (Exa by default)
+that returns detailed LLM summaries in snippet instead of raw page text.
 
-> **Admin web UI included:** open `/admin` on the running container
-> (e.g. `http://127.0.0.1:8555/admin`) — login `admin` / `admin`
-> (change `ADMIN_USER` / `ADMIN_PASS`). Every setting below can be viewed,
-> tested, and changed there; saves persist across restarts.
+Admin web UI included: open /admin on the running container
+(e.g. http://127.0.0.1:8555/admin) — login admin / admin
+(change ADMIN_USER / ADMIN_PASS). Every setting below can be viewed,
+tested, and changed there; saves persist across restarts.
 
 ```
 OpenWebUI                    SSALMP proxy               Search API + LLM
