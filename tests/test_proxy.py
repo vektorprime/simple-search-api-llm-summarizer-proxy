@@ -693,3 +693,23 @@ def test_mode_validation_and_legacy_caveman_migration():
         os.environ.pop("MODE", None)
         os.environ.pop("CAVEMAN_STYLE", None)
         _reload_config()
+
+
+def test_admin_every_field_has_detailed_tooltip():
+    """Each settings field must define a tip strictly longer than its hint."""
+    import pathlib
+    import re
+
+    html = pathlib.Path("app/admin.html").read_text()
+    fields = [
+        (m.group(1), m.group(2))
+        for m in re.finditer(r"(\w+):\{([^{}]*)\}", html)
+        if "label:" in m.group(2)
+    ]
+    assert len(fields) >= 15, f"expected all settings fields, parsed {len(fields)}"
+    for key, body in fields:
+        hint = re.search(r"hint:\"(.*?)\"(?=,|$)", body)
+        tip = re.search(r"tip:\"(.*?)\"(?=,|$)", body)
+        assert hint, f"{key}: missing hint"
+        assert tip, f"{key}: missing tip"
+        assert len(tip.group(1)) > len(hint.group(1)), f"{key}: tip must be longer than hint"
