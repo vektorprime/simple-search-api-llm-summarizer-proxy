@@ -357,9 +357,17 @@ async function detectModels(quiet){
       list.appendChild(o);
     });
     const inp = document.getElementById('cfg_LLM_MODEL');
-    if(inp && !inp.value && data.models && data.models.length) inp.value = data.models[0];
+    const ids = data.models || [];
+    if(inp){
+      if(!inp.value && ids.length) inp.value = ids[0];
+      else if(inp.value && ids.length && !ids.includes(inp.value)){
+        const old = inp.value; inp.value = ids[0];
+        if(!quiet) say('ok', 'Model switched from ' + old + ' to ' + ids[0] + ' (' + ids.length + ' detected from ' + data.base_url + '). Save to apply.');
+        return;
+      }
+    }
     if(!quiet){
-      if(data.models && data.models.length) say('ok', 'Detected ' + data.models.length + ' model(s) from ' + data.base_url + '.');
+      if(ids.length) say('ok', 'Detected ' + ids.length + ' model(s) from ' + data.base_url + ' — field already set to a served model.');
       else say('info', 'Backend answered but listed no models.');
     }
   }catch(e){ if(!quiet) say('err', 'Model detect failed: ' + e.message); }
