@@ -62,7 +62,7 @@ survives restarts:
 | `PROXY_API_KEY` | display only | `/search` accepts **any** API key (or none); value shown in admin UI only |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin`/`admin` | **Change these**; Basic auth for `/admin`, `/config` |
 | `LLM_PROVIDER` | `llamacpp` | `llamacpp` \| `vllm` \| `sglang`. Same chat API for all; only gates backend-specific options (slot pinning) |
-| `MODE` | `summary` | `summary` \| `summary-caveman` \| `original` \| `original-caveman`. `original` returns raw text with no LLM call; `*-caveman` uses telegraphic style |
+| `MODE` | `summary` | `summary` \| `summary-caveman` \| `original` \| `original-caveman`. `summary-caveman` is the same detailed summary in telegraphic style; `original` returns raw text with no LLM call |
 | `RETURN_IMAGE_URLS` | `false` | append page image URLs to the snippet body as text, so the downstream LLM can retrieve them |
 | `CAVEMAN_STYLE` | legacy | `true` behaves like `MODE=original-caveman` when `MODE` is unset |
 | `LLM_BASE_URL` | `http://10.0.0.187:8005/v1` | OpenAI-compatible base URL of your backend |

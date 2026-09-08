@@ -356,8 +356,10 @@ async def test_mode_switches_prompt():
         assert "Search query:" not in cave["messages"][1]["content"]  # no echo surface
         assert "Page URL:" not in cave["messages"][1]["content"]
         short = await body_with("summary-caveman")
+        # same task as plain summary — only the system prompt (style) differs
+        assert short["messages"][1] == plain["messages"][1]
+        assert short["messages"][0] != plain["messages"][0]
         assert "Do not summarize or omit facts" in short["messages"][0]["content"]
-        assert "Compress or drop peripheral detail" in short["messages"][1]["content"]
     finally:
         import os as _os
 
@@ -668,6 +670,49 @@ def test_return_image_urls_appended_as_text():
             "https://img.example.com/cover.jpg",
             "https://img.example.com/inline.png",
         ]
+    finally:
+        os.environ.pop("MODE", None)
+        os.environ.pop("RETURN_IMAGE_URLS", None)
+
+
+def test_return_image_urls_works_in_summary_mode():
+    """Image block is appended post-summary, so it holds in every LLM mode too."""
+    import os
+
+    client, _ = _client(
+        EXA_API_KEY="test-exa",
+        PROXY_API_KEY="",
+        LLM_BASE_URL="http://llm:8005/v1",
+        MODE="summary",
+        RETURN_IMAGE_URLS="true",
+        ADMIN_USER="admin",
+        ADMIN_PASS="admin",
+    )
+    try:
+        with respx.mock:
+            respx.post("https://api.exa.ai/search").mock(
+                return_value=Response(
+                    200,
+                    json={
+                        "results": [
+                            {
+                                "url": "https://example.com/a",
+                                "title": "A",
+                                "text": "Some body text.",
+                                "image": "https://img.example.com/cover.jpg",
+                            }
+                        ]
+                    },
+                )
+            )
+            respx.post("http://llm:8005/v1/chat/completions").mock(
+                return_value=Response(200, json={"choices": [{"message": {"content": "Summary."}}]})
+            )
+            r = client.post("/search", json={"query": "q", "count": 1})
+        assert r.status_code == 200
+        snippet = r.json()[0]["snippet"]
+        assert snippet.startswith("Summary.")
+        assert "https://img.example.com/cover.jpg" in snippet
     finally:
         os.environ.pop("MODE", None)
         os.environ.pop("RETURN_IMAGE_URLS", None)

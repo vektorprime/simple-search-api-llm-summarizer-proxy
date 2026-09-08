@@ -135,11 +135,12 @@ def build_user_prompt(
             f"{clipped}"
         )
     if mode == "summary-caveman":
+        # Identical task to "summary" — only the system prompt differs
+        # (telegraphic style). No selection/compression of its own, so no
+        # information is lost versus the plain summary.
         task = (
-            "Task: Summarize the key points above, focusing on relevance to "
-            "the search query. Write in caveman/telegraphic style: short "
-            "fragments, no filler. Compress or drop peripheral detail. "
-            "Output only the summary, no preamble."
+            "Task: Summarize the page content above in detail. "
+            "Focus on relevance to the search query where applicable."
         )
     else:
         task = (
