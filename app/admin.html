@@ -108,7 +108,7 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;margin-top:1.5rem}
 
   <div class="card">
     <h2>Test search <span class="tag">raw result vs summary</span></h2>
-    <p class="desc">Runs the full pipeline and shows, side by side, the raw search API result (left) and the summary returned to OpenWebUI (right).</p>
+    <p class="desc">Runs the full pipeline and shows the original (left), the summary (right), and — in caveman modes — the caveman variants below, named by mode.</p>
     <div class="rowflex">
       <input type="text" id="q" value="What is the Eiffel Tower?"/>
       <input type="number" id="n" value="2" min="1" max="10"/>
@@ -355,7 +355,7 @@ async function test(){
       const left = document.createElement('div'); left.className = 'pane';
       const lh = document.createElement('h3');
       const exaText = item.exa_text || '';
-      lh.textContent = 'Search API result ';
+      lh.textContent = 'Original ';
       const lcnt = document.createElement('span'); lcnt.className = 'cnt';
       lcnt.textContent = '· ' + exaText.length.toLocaleString() + ' chars';
       lh.appendChild(lcnt); left.appendChild(lh);
@@ -374,7 +374,7 @@ async function test(){
       const rh = document.createElement('h3');
       const showCaveman = item.comparison_summary != null;
       const rightText = showCaveman ? item.comparison_summary : (item.snippet || '');
-      rh.textContent = showCaveman ? 'Summary (normal) ' : (mode === 'original' ? 'Original (no changes) → OpenWebUI ' : 'Summary → OpenWebUI (snippet) ');
+      rh.textContent = showCaveman ? 'Summary ' : (mode === 'original' ? 'Original → OpenWebUI ' : 'Summary → OpenWebUI ');
       const rcnt = document.createElement('span'); rcnt.className = 'cnt';
       rcnt.textContent = '· ' + rightText.length.toLocaleString() + ' chars';
       rh.appendChild(rcnt); right.appendChild(rh);
@@ -386,9 +386,10 @@ async function test(){
       // BOTTOM (caveman mode only): A/B of new (v2, actually sent) vs old (v1).
       if(showCaveman){
         const ab = document.createElement('div'); ab.className = 'compare'; ab.style.marginTop = '.8rem';
-        const mkPane = (title, txt) => {
+        const mkPane = (title, txt, tip) => {
           const p = document.createElement('div'); p.className = 'pane';
           const h = document.createElement('h3'); h.textContent = title + ' ';
+          if(tip) h.title = tip;
           const c = document.createElement('span'); c.className = 'cnt';
           c.textContent = '· ' + txt.length.toLocaleString() + ' chars';
           h.appendChild(c); p.appendChild(h);
@@ -396,8 +397,11 @@ async function test(){
           b.textContent = txt || '(empty)'; p.appendChild(b);
           return p;
         };
-        ab.appendChild(mkPane('Caveman summary (new) → OpenWebUI (snippet)', item.snippet || ''));
-        ab.appendChild(mkPane('Caveman summary (old v1)', item.legacy_caveman_snippet || ''));
+        const sentTitle = mode === 'summary-caveman'
+          ? 'Summary with caveman → OpenWebUI (snippet)'
+          : 'Original with caveman → OpenWebUI (snippet)';
+        ab.appendChild(mkPane(sentTitle, item.snippet || ''));
+        ab.appendChild(mkPane('Summary with caveman', item.legacy_caveman_snippet || '', 'Legacy v1 caveman prompt, kept for comparison'));
         card.appendChild(ab);
       }
       box.appendChild(card);
