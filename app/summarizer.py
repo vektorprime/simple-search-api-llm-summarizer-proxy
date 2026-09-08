@@ -78,7 +78,9 @@ def build_user_prompt(
     text: str,
     mode: str = "summary",
 ) -> str:
-    clipped = (text or "")[: config.SUMMARY_INPUT_MAX_CHARS]
+    # 0/negative = unlimited: forward everything fetched.
+    limit = config.SUMMARY_INPUT_MAX_CHARS
+    clipped = (text or "") if limit <= 0 else (text or "")[:limit]
     if mode == "original-caveman":
         # Full-rewrite mode: no meta header — the model otherwise echoes
         # the "Search query / Page title / Page URL" labels into the output.

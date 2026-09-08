@@ -36,6 +36,10 @@ header.top h1{font-size:1.5rem;margin:0}
 .field input:disabled{background:#eef2f7;color:#9aa3b2;cursor:not-allowed}
 .field input[type=checkbox]{width:1.15rem;height:1.15rem;accent-color:var(--accent);cursor:pointer}
 .field select{width:100%;padding:.55rem .65rem;font-size:.95rem;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}
+details.adv{margin-top:.9rem;border:1px dashed var(--line);border-radius:8px;padding:.55rem .8rem;background:#fbfcfe}
+details.adv summary{cursor:pointer;font-weight:600;font-size:.88rem;color:var(--muted)}
+details.adv summary:hover{color:var(--accent)}
+details.adv .grid{margin-top:.7rem}
 .actions{position:sticky;bottom:0;display:flex;gap:.6rem;align-items:center;background:rgba(255,255,255,.96);border:1px solid var(--line);border-radius:12px;padding:.7rem .9rem;margin:0 0 1rem}
 button{font-size:.95rem;border-radius:8px;padding:.6rem 1.2rem;cursor:pointer;border:1px solid transparent}
 button.primary{background:var(--accent);color:#fff;font-weight:600}
@@ -144,10 +148,10 @@ const GROUPS = [
     EXA_TIMEOUT_SEC:{label:"Search timeout", hint:"Timeout for one search API call.", tip:"If the search API does not answer in time, the whole search returns [] and OpenWebUI shows no results. 20s is generous; raise it on slow networks.", type:"number"},
     REQUEST_TIMEOUT_SEC:{label:"Whole-search timeout", hint:"Ceiling for the whole search, queue wait included.", tip:"Covers fetch plus all sequential summaries plus waiting behind other searches (single-flight). A count=5 search is ~5 summaries back-to-back — size this at summaries × per-summary time plus queue headroom, or long searches abort to whatever finished.", type:"number"}
   }},
-  {title:"Content limits & queueing", tag:"sizes", desc:"Payload sizes and how many summaries run at once.", fields:{
-    EXA_TEXT_MAX_CHARS:{label:"Result text chars", hint:"Page-text characters fetched per result.", tip:"Requested from the search API per result. Bigger means more context but slower fetches and longer prompts. Only SUMMARY_INPUT_MAX_CHARS of it is actually forwarded per summary — raising this alone past that changes nothing.", type:"number"},
-    SUMMARY_INPUT_MAX_CHARS:{label:"Text chars to LLM", hint:"Page-text characters forwarded per summary.", tip:"Fetched text is truncated to this before reaching the LLM, so this is the main lever on prompt size, speed and cost. Raising it only helps if the fetch limit above is at least as large.", type:"number"},
-    MAX_CONCURRENT_SUMMARIES:{label:"Concurrent summaries", hint:"Summaries running at once (1 = single-file queue).", tip:"Global cap shared by ALL concurrent searches, not per search. 1 means strictly one prompt in flight against the backend; everything else waits FIFO. Raise only if the backend genuinely executes jobs in parallel — otherwise extra concurrency just queues inside the backend.", type:"number"}
+  {title:"Content limits & queueing", tag:"sizes", desc:"How many summaries run at once. Per-result text caps live under Advanced.", advanced:["EXA_TEXT_MAX_CHARS","SUMMARY_INPUT_MAX_CHARS"], fields:{
+    MAX_CONCURRENT_SUMMARIES:{label:"Concurrent summaries", hint:"Summaries running at once (1 = single-file queue).", tip:"Global cap shared by ALL concurrent searches, not per search. 1 means strictly one prompt in flight against the backend; everything else waits FIFO. Raise only if the backend genuinely executes jobs in parallel — otherwise extra concurrency just queues inside the backend.", type:"number"},
+    EXA_TEXT_MAX_CHARS:{label:"Ask Search API For This Many Text Chars", hint:"0 = unlimited (fetch all the API returns).", tip:"Characters of page text requested per result. 0 (default) omits the cap so the search API returns its default text. Only what the send-limit below allows is actually forwarded per summary — raising this past that changes nothing.", type:"number"},
+    SUMMARY_INPUT_MAX_CHARS:{label:"Send LLM This Many Text Chars", hint:"0 = unlimited (forward everything fetched).", tip:"Fetched text is truncated to this before reaching the LLM, so this is the main lever on prompt size, speed and cost. 0 (default) forwards everything fetched. Raising it only helps if the fetch limit above is at least as large.", type:"number"}
   }},
   {title:"Access", tag:"auth", desc:"Who may use the proxy and this page.", fields:{
     PROXY_API_KEY:{label:"Proxy API key", hint:"Shown here only — never enforced.", tip:"Any key (or none) is accepted on /search by design. This value is stored and displayed masked, but changing it affects nothing functionally — it exists so OpenWebUI's required key field has something to hold.", secret:true},
@@ -200,6 +204,19 @@ function buildForm(cfg){
     const d = document.createElement('p'); d.className = 'desc'; d.textContent = g.desc;
     card.appendChild(d);
     const grid = document.createElement('div'); grid.className = 'grid';
+    const advKeys = new Set(g.advanced || []);
+    let advBox = null, advGrid = null;
+    const fieldTarget = (key) => {
+      if(!advKeys.has(key)) return grid;
+      if(!advBox){
+        advBox = document.createElement('details'); advBox.className = 'adv';
+        const sum = document.createElement('summary'); sum.textContent = 'Advanced';
+        advBox.appendChild(sum);
+        advGrid = document.createElement('div'); advGrid.className = 'grid';
+        advBox.appendChild(advGrid);
+      }
+      return advGrid;
+    };
     Object.entries(g.fields).forEach(([key, meta]) => {
       if(!(key in cfg)) return;
       const wrap = document.createElement('div'); wrap.className = 'field'; wrap.id = 'row_' + key;
@@ -244,9 +261,11 @@ function buildForm(cfg){
         wrap.appendChild(det);
       }
       if(meta.hint){ const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = meta.hint; wrap.appendChild(hint); }
-      grid.appendChild(wrap);
+      fieldTarget(key).appendChild(wrap);
     });
-    card.appendChild(grid); host.appendChild(card);
+    card.appendChild(grid);
+    if(advBox) card.appendChild(advBox);
+    host.appendChild(card);
   });
   refreshLlamaCpp();
 }

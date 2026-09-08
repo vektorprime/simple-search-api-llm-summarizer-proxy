@@ -127,14 +127,16 @@ RETURN_IMAGE_URLS: bool = _get_bool("RETURN_IMAGE_URLS", False)
 # --- Exa ---
 EXA_BASE_URL: str = _get("EXA_BASE_URL", "https://api.exa.ai")
 EXA_TIMEOUT_SEC: int = _get_int("EXA_TIMEOUT_SEC", 20)
-EXA_TEXT_MAX_CHARS: int = _get_int("EXA_TEXT_MAX_CHARS", 8000)
+# 0 = unlimited (omit maxCharacters; Exa returns its default text).
+EXA_TEXT_MAX_CHARS: int = _get_int("EXA_TEXT_MAX_CHARS", 0)
 
 # --- Proxy behaviour ---
 # NOTE: llama.cpp on 2x3080 effectively runs 1 summarization at a time;
 # the proxy enforces this globally (across requests) and queues the rest.
 PORT: int = _get_int("PORT", 8555)
 MAX_CONCURRENT_SUMMARIES: int = _get_int("MAX_CONCURRENT_SUMMARIES", 1)
-SUMMARY_INPUT_MAX_CHARS: int = _get_int("SUMMARY_INPUT_MAX_CHARS", 12000)
+# 0 = unlimited (forward everything fetched).
+SUMMARY_INPUT_MAX_CHARS: int = _get_int("SUMMARY_INPUT_MAX_CHARS", 0)
 REQUEST_TIMEOUT_SEC: int = _get_int("REQUEST_TIMEOUT_SEC", 1200)
 
 # --- Admin UI login (HTTP Basic Auth for /admin and /config) ---

@@ -202,6 +202,8 @@ def test_single_flight_defaults():
     assert cfg.LLM_TIMEOUT_SEC == 300
     assert cfg.REQUEST_TIMEOUT_SEC == 1200
     assert cfg.LLM_MAX_TOKENS == 0  # unlimited by default
+    assert cfg.EXA_TEXT_MAX_CHARS == 0  # unlimited by default
+    assert cfg.SUMMARY_INPUT_MAX_CHARS == 0  # unlimited by default
 
 
 @pytest.mark.asyncio
@@ -750,3 +752,69 @@ def test_admin_every_field_has_detailed_tooltip():
         assert hint, f"{key}: missing hint"
         assert tip, f"{key}: missing tip"
         assert len(tip.group(1)) > len(hint.group(1)), f"{key}: tip must be longer than hint"
+
+
+def _exa_request_contents(env):
+    import json as _json
+    import os
+
+    os.environ.update(env)
+    for var in ("EXA_TEXT_MAX_CHARS",):
+        if var not in env:
+            os.environ.pop(var, None)
+    try:
+        import importlib
+
+        import app.config as cfg
+        import app.exa as exa_mod
+
+        importlib.reload(cfg)
+        importlib.reload(exa_mod)
+        with respx.mock:
+            route = respx.post("https://api.exa.ai/search").mock(
+                return_value=Response(200, json={"results": []})
+            )
+            import anyio as _anyio
+
+            _anyio.run(exa_mod.exa_search, "q", 1)
+        return _json.loads(route.calls[0].request.content)["contents"]
+    finally:
+        import os as _os
+
+        _os.environ.pop("EXA_TEXT_MAX_CHARS", None)
+
+
+def test_exa_text_cap_zero_means_unlimited():
+    contents = _exa_request_contents({"EXA_API_KEY": "k", "EXA_TEXT_MAX_CHARS": "0"})
+    assert contents["text"] is True  # no maxCharacters cap sent
+    contents = _exa_request_contents({"EXA_API_KEY": "k", "EXA_TEXT_MAX_CHARS": "500"})
+    assert contents["text"] == {"maxCharacters": 500}
+
+
+@pytest.mark.asyncio
+async def test_zero_send_limit_forwards_everything():
+    import os
+
+    os.environ["LLM_BASE_URL"] = "http://llm:8005/v1"
+    os.environ["SUMMARY_INPUT_MAX_CHARS"] = "0"
+    long_text = "x" * 20000
+    try:
+        import importlib
+        import json as _json
+
+        import app.config as cfg
+        import app.summarizer as sum_mod
+
+        importlib.reload(cfg)
+        importlib.reload(sum_mod)
+        with respx.mock:
+            route = respx.post("http://llm:8005/v1/chat/completions").mock(
+                return_value=Response(200, json={"choices": [{"message": {"content": "s"}}]})
+            )
+            await sum_mod.summarize_one("q", "t", "http://x", long_text)
+        user_msg = _json.loads(route.calls[0].request.content)["messages"][1]["content"]
+        assert long_text in user_msg  # nothing truncated
+    finally:
+        import os as _os
+
+        _os.environ.pop("SUMMARY_INPUT_MAX_CHARS", None)

@@ -20,12 +20,16 @@ async def exa_search(query: str, num_results: int) -> list[dict]:
         log.error("EXA_API_KEY is not set")
         return []
 
+    # 0/negative = unlimited: omit maxCharacters so Exa returns its default text.
+    text_option: bool | dict = (
+        True if config.EXA_TEXT_MAX_CHARS <= 0 else {"maxCharacters": config.EXA_TEXT_MAX_CHARS}
+    )
     payload = {
         "query": query,
         "numResults": max(1, min(num_results, 20)),
         "type": "auto",
         "contents": {
-            "text": {"maxCharacters": config.EXA_TEXT_MAX_CHARS},
+            "text": text_option,
             "highlights": True,
         },
     }

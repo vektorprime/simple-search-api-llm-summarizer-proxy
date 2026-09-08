@@ -87,10 +87,10 @@ survives restarts:
 | `LLAMACPP_SLOT_ID` | `1` | slot id, 1 or above (server slots are 0-based and wrap) |
 | `LLM_MAX_TOKENS` | `0` | cap per summary; `0`/negative omits it (server default = unlimited). Keep ≥1500 when set on reasoning backends: reasoning tokens come out of this budget; small values return empty content |
 | `LLM_TIMEOUT_SEC` | `300` | per-summary timeout; large reasoning models are slow |
-| `EXA_TEXT_MAX_CHARS` | `8000` | text chars requested per result from the search API |
+| `EXA_TEXT_MAX_CHARS` | `0` | chars fetched per result; `0` = unlimited (omit the cap) |
 | `MAX_CONCURRENT_SUMMARIES` | `1` | global single-flight: only 1 summary runs at a time, rest queue (raise only if the inference engine handles parallel jobs) |
 | `REQUEST_TIMEOUT_SEC` | `1200` | whole-search timeout incl. queue wait |
-| `SUMMARY_INPUT_MAX_CHARS` | `12000` | page text chars sent to the LLM backend |
+| `SUMMARY_INPUT_MAX_CHARS` | `0` | chars forwarded per summary; `0` = unlimited (forward everything fetched) |
 
 On first start with no `config.json`, a legacy `.env` file in the working
 directory is read once as the starting point (for upgrades from earlier
