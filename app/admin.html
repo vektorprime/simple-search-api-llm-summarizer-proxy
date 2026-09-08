@@ -126,7 +126,8 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;margin-top:1.5rem}
 const GROUPS = [
   {title:"Search API", tag:"search provider", desc:"Where results and page text come from (current provider: Exa).", fields:{
     EXA_API_KEY:{label:"Search API key", hint:"Required. Key for the configured search provider.", secret:true},
-    EXA_BASE_URL:{label:"Search base URL", hint:"Base URL of the search provider."}
+    EXA_BASE_URL:{label:"Search base URL", hint:"Base URL of the search provider."},
+    RETURN_IMAGE_URLS:{label:"Return image URLs in body as text", hint:"Appends page image URLs to the snippet body as text, so the downstream LLM can retrieve them if needed.", type:"checkbox"}
   }},
   {title:"Summarizer (local LLM)", tag:"LLM backend", desc:"OpenAI-compatible endpoint that writes the detailed summaries.", fields:{
     LLM_PROVIDER:{label:"LLM API provider", hint:"Which backend serves the summaries. Slot pinning below applies to llama.cpp only.", type:"select", options:[["llamacpp","llama.cpp"],["vllm","vLLM"],["sglang","SGLang"]]},
@@ -134,7 +135,7 @@ const GROUPS = [
     LLM_MODEL:{label:"LLM model", hint:"Must match a backend model id. Use Detect (or start typing) to list what the backend serves.", secret:false},
     LLM_API_KEY:{label:"LLM API key", hint:"Sent as Bearer if the backend needs one.", secret:true},
     LLM_MAX_TOKENS:{label:"Max tokens / summary", hint:"0 or empty = unlimited (omit limit). If set, keep ≥1500 — reasoning tokens come out of this budget.", type:"number"},
-    CAVEMAN_STYLE:{label:"Summarize in caveman style", hint:"Tiny terse summaries, fewer tokens. Uses the caveman instruction set.", type:"checkbox"},
+    MODE:{label:"Mode", hint:"summary: detailed LLM summary. summary with caveman: summary in telegraphic style. original: raw text unchanged (no LLM call). original with caveman: full telegraphic rewrite via LLM.", type:"select", options:[["summary","Summary"],["summary-caveman","Summary with caveman"],["original","Original (no changes)"],["original-caveman","Original with caveman"]]},
     LLAMACPP_USE_SLOTS:{label:"Use slots (pin job to a slot)", hint:"llama.cpp only: send id_slot so the job lands on a specific slot instead of any idle one.", type:"checkbox"},
     LLAMACPP_SLOT_ID:{label:"Slot ID", hint:"Whole number, 1 or above. Server slots are 0-based and wrap (e.g. 4 → slot 0 with 4 slots).", type:"number", min:1}
   }},
@@ -335,9 +336,10 @@ async function test(){
     const payload = await r.json();
     if(!r.ok) throw new Error(payload.detail || ('HTTP ' + r.status));
     const data = payload.results || [];
+    const mode = payload.mode || 'summary';
     const secs = ((Date.now()-t0)/1000).toFixed(0);
-    say('ok', 'Test search finished: ' + data.length + ' result(s) in ' + secs + 's.');
-    const srcName = {llm:'LLM summary', highlights:'Search highlights (LLM fallback)', text:'Search text (LLM fallback)', empty:'empty'};
+    say('ok', 'Test search finished: ' + data.length + ' result(s) in ' + secs + 's (mode: ' + mode + ').');
+    const srcName = {llm:'LLM summary', original:'Original (no changes)', highlights:'Search highlights (LLM fallback)', text:'Search text (LLM fallback)', empty:'empty'};
     data.forEach(item => {
       const card = document.createElement('div'); card.className = 'result';
       const title = document.createElement('div');
@@ -366,13 +368,13 @@ async function test(){
         item.exa_highlights.forEach(h => { const li = document.createElement('li'); li.textContent = h; ul.appendChild(li); });
         left.appendChild(ul);
       }
-      // RIGHT: summary. With caveman mode on this is the normal-style
-      // comparison; otherwise it is the snippet actually sent to OpenWebUI.
+      // RIGHT: summary. With caveman modes on this is the normal-style
+      // comparison; in original mode it is the raw text actually sent.
       const right = document.createElement('div'); right.className = 'pane';
       const rh = document.createElement('h3');
       const showCaveman = item.comparison_summary != null;
       const rightText = showCaveman ? item.comparison_summary : (item.snippet || '');
-      rh.textContent = showCaveman ? 'Summary (normal) ' : 'Summary → OpenWebUI (snippet) ';
+      rh.textContent = showCaveman ? 'Summary (normal) ' : (mode === 'original' ? 'Original (no changes) → OpenWebUI ' : 'Summary → OpenWebUI (snippet) ');
       const rcnt = document.createElement('span'); rcnt.className = 'cnt';
       rcnt.textContent = '· ' + rightText.length.toLocaleString() + ' chars';
       rh.appendChild(rcnt); right.appendChild(rh);
@@ -381,18 +383,22 @@ async function test(){
       right.appendChild(rb);
 
       cmp.appendChild(left); cmp.appendChild(right); card.appendChild(cmp);
-      // BOTTOM (caveman mode only): the caveman summary actually sent.
+      // BOTTOM (caveman mode only): A/B of new (v2, actually sent) vs old (v1).
       if(showCaveman){
-        const bottom = document.createElement('div'); bottom.className = 'pane'; bottom.style.marginTop = '.8rem';
-        const bh = document.createElement('h3');
-        const snipText = item.snippet || '';
-        bh.textContent = 'Caveman summary → OpenWebUI (snippet) ';
-        const bcnt = document.createElement('span'); bcnt.className = 'cnt';
-        bcnt.textContent = '· ' + snipText.length.toLocaleString() + ' chars';
-        bh.appendChild(bcnt); bottom.appendChild(bh);
-        const bb = document.createElement('div'); bb.className = 'body';
-        bb.textContent = snipText || '(empty)';
-        bottom.appendChild(bb); card.appendChild(bottom);
+        const ab = document.createElement('div'); ab.className = 'compare'; ab.style.marginTop = '.8rem';
+        const mkPane = (title, txt) => {
+          const p = document.createElement('div'); p.className = 'pane';
+          const h = document.createElement('h3'); h.textContent = title + ' ';
+          const c = document.createElement('span'); c.className = 'cnt';
+          c.textContent = '· ' + txt.length.toLocaleString() + ' chars';
+          h.appendChild(c); p.appendChild(h);
+          const b = document.createElement('div'); b.className = 'body';
+          b.textContent = txt || '(empty)'; p.appendChild(b);
+          return p;
+        };
+        ab.appendChild(mkPane('Caveman summary (new) → OpenWebUI (snippet)', item.snippet || ''));
+        ab.appendChild(mkPane('Caveman summary (old v1)', item.legacy_caveman_snippet || ''));
+        card.appendChild(ab);
       }
       box.appendChild(card);
     });

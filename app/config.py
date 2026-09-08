@@ -101,7 +101,28 @@ LLM_MAX_TOKENS: int = _get_int("LLM_MAX_TOKENS", 0)
 LLAMACPP_USE_SLOTS: bool = _get_bool("LLAMACPP_USE_SLOTS", False)
 LLAMACPP_SLOT_ID: int = _get_int("LLAMACPP_SLOT_ID", 1)
 # Caveman style: ultra-terse summaries to save tokens.
-CAVEMAN_STYLE: bool = _get_bool("CAVEMAN_STYLE", False)
+# (Superseded by MODE below, but still read for backwards compatibility.)
+_LEGACY_CAVEMAN: bool = _get_bool("CAVEMAN_STYLE", False)
+
+# --- Operation mode ---
+# summary: detailed LLM summary (default)
+# summary-caveman: LLM summary in telegraphic caveman style
+# original: raw search text, unchanged, no LLM call
+# original-caveman: full telegraphic rewrite via LLM, nothing omitted
+_VALID_MODES = ("summary", "summary-caveman", "original", "original-caveman")
+
+
+def _resolve_mode() -> str:
+    raw = _raw("MODE")
+    if raw is None:
+        return "original-caveman" if _LEGACY_CAVEMAN else "summary"
+    mode = raw.strip().lower()
+    return mode if mode in _VALID_MODES else "summary"
+
+
+MODE: str = _resolve_mode()
+# Append page image URLs to the snippet body as text (downstream LLM can use them).
+RETURN_IMAGE_URLS: bool = _get_bool("RETURN_IMAGE_URLS", False)
 
 # --- Exa ---
 EXA_BASE_URL: str = _get("EXA_BASE_URL", "https://api.exa.ai")
@@ -129,6 +150,7 @@ _EDITABLE_STR = (
     "LLM_MODEL",
     "LLM_API_KEY",
     "EXA_BASE_URL",
+    "MODE",
 )
 _EDITABLE_INT = (
     "LLM_TIMEOUT_SEC",
@@ -141,7 +163,7 @@ _EDITABLE_INT = (
     "REQUEST_TIMEOUT_SEC",
 )
 _EDITABLE_FLOAT: tuple[str, ...] = ()
-_EDITABLE_BOOL = ("LLAMACPP_USE_SLOTS", "CAVEMAN_STYLE")
+_EDITABLE_BOOL = ("LLAMACPP_USE_SLOTS", "RETURN_IMAGE_URLS")
 
 EDITABLE_FIELDS: tuple[str, ...] = _EDITABLE_STR + _EDITABLE_INT + _EDITABLE_FLOAT + _EDITABLE_BOOL
 _SECRET_FIELDS = {"EXA_API_KEY", "PROXY_API_KEY", "LLM_API_KEY"}
@@ -198,6 +220,9 @@ def update_config(updates: dict) -> list[str]:
                     setattr(mod, name, str(raw).strip().lower() in ("1", "true", "yes", "on"))
             elif name == "LLM_PROVIDER":
                 setattr(mod, name, str(raw).strip().lower() or "llamacpp")
+            elif name == "MODE":
+                mode = str(raw).strip().lower()
+                setattr(mod, name, mode if mode in _VALID_MODES else "summary")
             else:
                 setattr(mod, name, str(raw).strip())
             applied.append(name)

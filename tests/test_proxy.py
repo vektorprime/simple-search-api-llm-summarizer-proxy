@@ -257,7 +257,7 @@ async def _summarize_body(env):
     import os
 
     os.environ.update(env)
-    for var in ("LLM_PROVIDER", "LLAMACPP_USE_SLOTS", "LLAMACPP_SLOT_ID", "CAVEMAN_STYLE"):
+    for var in ("LLM_PROVIDER", "LLAMACPP_USE_SLOTS", "LLAMACPP_SLOT_ID", "MODE"):
         if var not in env:
             os.environ.pop(var, None)
     import importlib
@@ -325,13 +325,13 @@ def test_llamacpp_slot_defaults_and_bool_parsing():
 
 
 @pytest.mark.asyncio
-async def test_caveman_style_switches_prompt():
+async def test_mode_switches_prompt():
     import json as _json
     import os
 
-    async def body_with(caveman):
+    async def body_with(mode):
         os.environ["LLM_BASE_URL"] = "http://llm:8005/v1"
-        os.environ["CAVEMAN_STYLE"] = caveman
+        os.environ["MODE"] = mode
         import importlib
 
         import app.config as cfg
@@ -346,14 +346,59 @@ async def test_caveman_style_switches_prompt():
             await sum_mod.summarize_one("q", "t", "http://x", "some page text")
         return _json.loads(route.calls[0].request.content)
 
-    off = await body_with("false")
-    assert "ACTIVE EVERY RESPONSE" not in off["messages"][0]["content"]
-    on = await body_with("true")
-    assert "ACTIVE EVERY RESPONSE" in on["messages"][0]["content"]
-    assert "caveman" in on["messages"][1]["content"].lower()
-    import os as _os
+    try:
+        plain = await body_with("summary")
+        assert "Do not summarize or omit facts" not in plain["messages"][0]["content"]
+        assert "Search query:" in plain["messages"][1]["content"]  # grounding header kept
+        cave = await body_with("original-caveman")
+        assert "Do not summarize or omit facts" in cave["messages"][0]["content"]
+        assert "caveman" in cave["messages"][1]["content"].lower()
+        assert "Search query:" not in cave["messages"][1]["content"]  # no echo surface
+        assert "Page URL:" not in cave["messages"][1]["content"]
+        short = await body_with("summary-caveman")
+        assert "Do not summarize or omit facts" in short["messages"][0]["content"]
+        assert "Compress or drop peripheral detail" in short["messages"][1]["content"]
+    finally:
+        import os as _os
 
-    _os.environ.pop("CAVEMAN_STYLE", None)  # don't leak into other tests
+        _os.environ.pop("MODE", None)  # don't leak into other tests
+
+
+@pytest.mark.asyncio
+async def test_caveman_v1_vs_v2_prompts():
+    import json as _json
+    import os
+
+    async def body_with(variant):
+        os.environ["LLM_BASE_URL"] = "http://llm:8005/v1"
+        os.environ.pop("MODE", None)
+        import importlib
+
+        import app.config as cfg
+        import app.summarizer as sum_mod
+
+        importlib.reload(cfg)
+        importlib.reload(sum_mod)
+        with respx.mock:
+            route = respx.post("http://llm:8005/v1/chat/completions").mock(
+                return_value=Response(200, json={"choices": [{"message": {"content": "s"}}]})
+            )
+            await sum_mod.summarize_one(
+                "q", "t", "http://x", "text", mode="original-caveman", caveman_variant=variant
+            )
+        return _json.loads(route.calls[0].request.content)
+
+    try:
+        v2 = await body_with("v2")
+        assert "Do not summarize or omit facts" in v2["messages"][0]["content"]
+        assert "Professional but tight" not in v2["messages"][0]["content"]
+        v1 = await body_with("v1")
+        assert "Professional but tight" in v1["messages"][0]["content"]
+        assert "Do not summarize or omit facts" not in v1["messages"][0]["content"]
+    finally:
+        import os as _os
+
+        _os.environ.pop("MODE", None)
 
 
 def test_debug_search_requires_admin_and_shows_both_sides():
@@ -399,7 +444,7 @@ def test_debug_search_caveman_adds_comparison_summary():
         EXA_API_KEY="test-exa",
         PROXY_API_KEY="",
         LLM_BASE_URL="http://llm:8005/v1",
-        CAVEMAN_STYLE="true",
+        MODE="original-caveman",
         ADMIN_USER="admin",
         ADMIN_PASS="admin",
     )
@@ -421,22 +466,28 @@ def test_debug_search_caveman_adds_comparison_summary():
         )
         llm = respx.post("http://llm:8005/v1/chat/completions").mock(
             side_effect=[
-                Response(200, json={"choices": [{"message": {"content": "CAVE TALK"}}]}),
+                Response(200, json={"choices": [{"message": {"content": "CAVE V2"}}]}),
                 Response(200, json={"choices": [{"message": {"content": "Normal summary"}}]}),
+                Response(200, json={"choices": [{"message": {"content": "CAVE V1"}}]}),
             ]
         )
         r = client.post("/debug/search", json={"query": "q", "count": 1}, headers=_basic())
     assert r.status_code == 200
     item = r.json()["results"][0]
-    assert item["snippet"] == "CAVE TALK"  # what OpenWebUI gets
-    assert item["comparison_summary"] == "Normal summary"  # third-pane content
-    assert llm.call_count == 2
+    assert item["snippet"] == "CAVE V2"  # what OpenWebUI gets
+    assert item["comparison_summary"] == "Normal summary"  # middle pane
+    assert item["legacy_caveman_snippet"] == "CAVE V1"  # A/B pane
+    assert llm.call_count == 3
     import json as _json
 
-    first = _json.loads(llm.calls[0].request.content)
-    second = _json.loads(llm.calls[1].request.content)
-    assert "ACTIVE EVERY RESPONSE" in first["messages"][0]["content"]
-    assert "ACTIVE EVERY RESPONSE" not in second["messages"][0]["content"]
+    bodies = [_json.loads(c.request.content) for c in llm.calls]
+    assert "Do not summarize or omit facts" in bodies[0]["messages"][0]["content"]  # v2
+    assert "caveman" not in bodies[1]["messages"][0]["content"].lower()  # normal
+    assert "caveman" not in bodies[1]["messages"][1]["content"].lower()
+    assert "Professional but tight" in bodies[2]["messages"][0]["content"]  # v1 legacy
+    import os as _os
+
+    _os.environ.pop("MODE", None)  # don't leak into other tests
 
 
 def test_llm_models_autodetect():
@@ -536,4 +587,109 @@ def test_legacy_dotenv_imported_when_no_config_file(tmp_path, monkeypatch):
         assert cfg.LLM_MODEL == "dotenv-model"
     finally:
         os.environ.pop("LLM_MODEL", None)
+        _reload_config()
+
+
+def test_original_mode_returns_raw_text_without_llm():
+    import os
+
+    client, _ = _client(
+        EXA_API_KEY="test-exa",
+        PROXY_API_KEY="",
+        LLM_BASE_URL="http://llm:8005/v1",
+        MODE="original",
+        ADMIN_USER="admin",
+        ADMIN_PASS="admin",
+    )
+    try:
+        with respx.mock:
+            respx.post("https://api.exa.ai/search").mock(
+                return_value=Response(
+                    200,
+                    json={
+                        "results": [
+                            {
+                                "url": "https://example.com/a",
+                                "title": "A",
+                                "text": "Raw page text verbatim.",
+                                "highlights": ["hl1"],
+                            }
+                        ]
+                    },
+                )
+            )
+            llm = respx.post("http://llm:8005/v1/chat/completions").mock(
+                return_value=Response(200, json={"choices": [{"message": {"content": "X"}}]})
+            )
+            r = client.post("/search", json={"query": "q", "count": 1})
+        assert r.status_code == 200
+        item = r.json()[0]
+        assert item["snippet"] == "Raw page text verbatim."
+        assert llm.call_count == 0  # no LLM call in original mode
+    finally:
+        os.environ.pop("MODE", None)
+
+
+def test_return_image_urls_appended_as_text():
+    import os
+
+    client, _ = _client(
+        EXA_API_KEY="test-exa",
+        PROXY_API_KEY="",
+        LLM_BASE_URL="http://llm:8005/v1",
+        MODE="original",
+        RETURN_IMAGE_URLS="true",
+        ADMIN_USER="admin",
+        ADMIN_PASS="admin",
+    )
+    try:
+        with respx.mock:
+            respx.post("https://api.exa.ai/search").mock(
+                return_value=Response(
+                    200,
+                    json={
+                        "results": [
+                            {
+                                "url": "https://example.com/a",
+                                "title": "A",
+                                "text": "Body with ![alt](https://img.example.com/inline.png) pic.",
+                                "image": "https://img.example.com/cover.jpg",
+                            }
+                        ]
+                    },
+                )
+            )
+            r = client.post("/debug/search", json={"query": "q", "count": 1}, headers=_basic())
+        assert r.status_code == 200
+        item = r.json()["results"][0]
+        assert "https://img.example.com/cover.jpg" in item["snippet"]
+        assert "https://img.example.com/inline.png" in item["snippet"]
+        assert item["image_urls"] == [
+            "https://img.example.com/cover.jpg",
+            "https://img.example.com/inline.png",
+        ]
+    finally:
+        os.environ.pop("MODE", None)
+        os.environ.pop("RETURN_IMAGE_URLS", None)
+
+
+def test_mode_validation_and_legacy_caveman_migration():
+    import os
+
+    os.environ.pop("MODE", None)
+    os.environ.pop("CAVEMAN_STYLE", None)
+    try:
+        cfg = _reload_config()
+        assert cfg.MODE == "summary"  # default
+        cfg.update_config({"MODE": "nonsense"})
+        assert cfg.MODE == "summary"  # invalid falls back
+        cfg.update_config({"MODE": "Original-Caveman"})
+        assert cfg.MODE == "original-caveman"  # normalized
+        os.environ["CAVEMAN_STYLE"] = "true"  # legacy flag migrates
+        os.environ.pop("MODE", None)
+        cfg = _reload_config()
+        assert cfg.MODE == "original-caveman"
+    finally:
+        os.environ.pop("MODE", None)
+        os.environ.pop("CAVEMAN_STYLE", None)
         _reload_config()

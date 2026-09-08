@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import pathlib
+import re
 import secrets
 
 import httpx
@@ -63,22 +64,52 @@ def _fallback_snippet(item: dict) -> tuple[str, str]:
     return "", "empty"
 
 
-async def _summarize_item(query: str, item: dict) -> tuple[SearchResult, dict]:
-    """Return (openwebui_result, debug_info with raw Exa fields + summary source)."""
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\((https?://[^)\s]+)\)")
+
+
+def _image_urls(item: dict) -> list[str]:
+    """Representative image + any markdown-embedded image URLs, deduped."""
+    urls: list[str] = []
+    img = item.get("image")
+    if isinstance(img, str) and img.startswith("http"):
+        urls.append(img)
+    text = item.get("text") or ""
+    if isinstance(text, str):
+        for m in _MD_IMAGE_RE.findall(text):
+            if m not in urls:
+                urls.append(m)
+    return urls
+
+
+def _with_images(snippet: str, image_urls: list[str]) -> str:
+    if not image_urls:
+        return snippet
+    block = "\n\nImages on page:\n" + "\n".join(f"- {u}" for u in image_urls)
+    return (snippet + block) if snippet else block.strip()
+
+
+async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tuple[SearchResult, dict]:
+    """Return (openwebui_result, debug_info with raw search fields + summary source)."""
+    use_mode = config.MODE if mode is None else mode
     url = item.get("url") or item.get("link") or ""
     title = item.get("title")
     text = item.get("text") or ""
     highlights = item.get("highlights") if isinstance(item.get("highlights"), list) else []
+    image_urls = _image_urls(item) if config.RETURN_IMAGE_URLS else []
     snippet, source = "", "empty"
-    if text.strip():
+    if use_mode == "original":
+        if text.strip():
+            snippet, source = text, "original"
+    elif text.strip():
         # Global single-flight: only MAX_CONCURRENT_SUMMARIES summaries run
-        # against llama.cpp at once (default 1); everything else queues here.
+        # against the backend at once (default 1); everything else queues here.
         async with _global_summary_sem():
-            snippet = await summarize_one(query, title, url, text)
+            snippet = await summarize_one(query, title, url, text, mode=use_mode)
         if snippet:
             source = "llm"
     if not snippet:
         snippet, source = _fallback_snippet(item)
+    snippet = _with_images(snippet, image_urls)
     debug = {
         "link": url,
         "title": title,
@@ -86,6 +117,7 @@ async def _summarize_item(query: str, item: dict) -> tuple[SearchResult, dict]:
         "snippet_source": source,
         "exa_text": text,
         "exa_highlights": highlights,
+        "image_urls": image_urls,
     }
     return SearchResult(link=url, title=title, snippet=snippet), debug
 
@@ -214,12 +246,13 @@ async def search(
 async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> JSONResponse:
     """Admin-only: full pipeline trace per result.
 
-    Returns {"results": [{link, title, snippet, snippet_source,
-    exa_text, exa_highlights, comparison_summary}]} so the admin UI can show
-    the raw search API result next to the LLM summary returned to OpenWebUI.
-    When CAVEMAN_STYLE is on, `snippet` is the caveman summary actually sent
-    and `comparison_summary` is an extra normal-style summary for comparison
-    (null otherwise).
+    Returns {"mode": ..., "results": [{link, title, snippet, snippet_source,
+    exa_text, exa_highlights, image_urls, comparison_summary,
+    legacy_caveman_snippet}]} so the admin UI can show the raw search API
+    result next to the summary returned to OpenWebUI. In caveman modes,
+    `snippet` is the caveman variant actually sent, `comparison_summary` is
+    an extra normal-style summary, and `legacy_caveman_snippet` the v1 text
+    for old-vs-new comparison (nulls otherwise).
     """
     if not req.query.strip():
         return JSONResponse(content={"results": []})
@@ -242,31 +275,44 @@ async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> J
         log.warning("debug summarization pipeline failed: %s", e)
         return JSONResponse(content={"results": [], "error": str(e)})
     results = [dbg for r, dbg in pairs if r.link]
-    if config.CAVEMAN_STYLE:
-        # Extra normal-style variant so the UI can show original, summary
-        # AND caveman side by side. Reuses the global single-flight semaphore.
-        async def _normal(dbg: dict) -> None:
+    caveman_mode = config.MODE in ("summary-caveman", "original-caveman")
+    if caveman_mode:
+        # Extra variants so the UI can A/B: normal-style summary for the
+        # middle pane + legacy-v1 caveman for the old-vs-new comparison.
+        # Reuses the global single-flight semaphore.
+        async def _variants(dbg: dict) -> None:
             text = dbg.get("exa_text") or ""
             if not text.strip():
                 dbg["comparison_summary"] = None
+                dbg["legacy_caveman_snippet"] = None
                 return
             async with _global_summary_sem():
-                out = await summarize_one(req.query, dbg.get("title"), dbg.get("link") or "", text, caveman=False)
-            dbg["comparison_summary"] = out or None
+                normal = await summarize_one(
+                    req.query, dbg.get("title"), dbg.get("link") or "", text, mode="summary"
+                )
+            async with _global_summary_sem():
+                legacy = await summarize_one(
+                    req.query, dbg.get("title"), dbg.get("link") or "", text,
+                    mode="original-caveman", caveman_variant="v1",
+                )
+            dbg["comparison_summary"] = normal or None
+            dbg["legacy_caveman_snippet"] = legacy or None
 
         try:
             await asyncio.wait_for(
-                asyncio.gather(*(_normal(dbg) for dbg in results)),
+                asyncio.gather(*(_variants(dbg) for dbg in results)),
                 timeout=config.REQUEST_TIMEOUT_SEC,
             )
         except Exception as e:
             log.warning("debug comparison summaries failed: %s", e)
             for dbg in results:
                 dbg.setdefault("comparison_summary", None)
+                dbg.setdefault("legacy_caveman_snippet", None)
     else:
         for dbg in results:
             dbg["comparison_summary"] = None
-    return JSONResponse(content={"results": results})
+            dbg["legacy_caveman_snippet"] = None
+    return JSONResponse(content={"mode": config.MODE, "results": results})
 
 
 def _admin_html() -> str:

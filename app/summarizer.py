@@ -27,6 +27,50 @@ SYSTEM_PROMPT = (
 )
 
 CAVEMAN_SYSTEM_PROMPT = (
+    "Rewrite in caveman/telegraphic English. Preserve all factual information. "
+    "Remove articles, unnecessary pronouns, auxiliary/linking verbs, optional "
+    "prepositions, infinitive “to,” and other grammatical filler when meaning "
+    "remains clear. Prefer noun phrases and compact subject–verb–object "
+    "structures. Do not summarize or omit facts. Preserve names, numbers, "
+    "dates, negation, comparisons, causality, and relationships. Grammatical "
+    "correctness is not required.\n"
+    "\n"
+    "Generalize with rules like these:\n"
+    "Remove articles: a, an, the.\n"
+    "the final game in the series → final game in series\n"
+    "Remove pronouns when referent obvious: it, they, he, she, that.\n"
+    "said it was intended → said intended\n"
+    "Remove many helper/linking verbs: is, are, was, were, has been.\n"
+    "game was a commercial success → game commercial success\n"
+    "Keep main verbs, but simplify surrounding grammar.\n"
+    "was intended to be → intended be\n"
+    "was ported to Windows → ported to Windows\n"
+    "Remove infinitive “to” when meaning remains clear.\n"
+    "intended to be final → intended be final\n"
+    "attempts to challenge → attempts challenge\n"
+    "Remove possessive/function words where obvious.\n"
+    "the design of John's upgrades → Bob upgrade design\n"
+    "Prefer noun stacking.\n"
+    "the presentation of the story → story presentation\n"
+    "parts for the two devices → two device parts\n"
+    "Replace verbose constructions with shorter equivalents.\n"
+    "in order to → to\n"
+    "is able to → can\n"
+    "a series of → omit or use multiple\n"
+    "at the point of impact → at impact\n"
+    "Remove repeated subjects.\n"
+    "John focuses on distance combat... Bob uses... → John: distance combat... "
+    "Bob: close combat...\n"
+    "Keep names, numbers, dates, places, actions, relationships, negation, and "
+    "causal information. These carry most factual meaning.\n"
+    "Do not remove words when doing so creates ambiguity.\n"
+    "Bob does not use armor must retain not.\n"
+    "John defeated Bob cannot become John Bob defeated."
+)
+
+# Legacy v1 caveman prompt, kept only for A/B comparison in /debug/search.
+# Remove once a winner is picked.
+CAVEMAN_LEGACY_SYSTEM_PROMPT = (
     "ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. "
     'Still active if unsure. Off only: "stop caveman" / "normal mode".\n'
     "\n"
@@ -60,16 +104,48 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
 def build_user_prompt(
-    query: str, title: str | None, url: str, text: str, caveman: bool | None = None
+    query: str,
+    title: str | None,
+    url: str,
+    text: str,
+    mode: str = "summary",
+    caveman_variant: str = "v2",
 ) -> str:
-    use_caveman = config.CAVEMAN_STYLE if caveman is None else caveman
     clipped = (text or "")[: config.SUMMARY_INPUT_MAX_CHARS]
-    if use_caveman:
+    if mode == "original-caveman" and caveman_variant == "v1":
+        # Legacy shape (kept byte-stable for the v1 A/B arm).
         task = (
             "Task: Summarize page content above like caveman. "
             "Very few words. Short sentences. Keep key facts."
         )
+        return (
+            f"Search query: {query}\n"
+            f"Page title: {title or 'n/a'}\n"
+            f"Page URL: {url}\n\n"
+            f"Page content:\n{clipped}\n\n"
+            f"{task}"
+        )
+    if mode == "original-caveman":
+        # Full-rewrite mode: no meta header — the model otherwise echoes
+        # the "Search query / Page title / Page URL" labels into the output.
+        return (
+            "Rewrite the following page content in caveman/telegraphic style. "
+            "Preserve every fact. Omit nothing. "
+            "Output only the rewritten content, no preamble.\n\n"
+            f"{clipped}"
+        )
+    if mode == "summary-caveman":
+        task = (
+            "Task: Summarize the key points above, focusing on relevance to "
+            "the search query. Write in caveman/telegraphic style: short "
+            "fragments, no filler. Compress or drop peripheral detail. "
+            "Output only the summary, no preamble."
+        )
     else:
+        task = (
+            "Task: Summarize the page content above in detail. "
+            "Focus on relevance to the search query where applicable."
+        )
         task = (
             "Task: Summarize the page content above in detail. "
             "Focus on relevance to the search query where applicable."
@@ -93,21 +169,40 @@ def clean_summary(text: str | None) -> str:
 
 
 async def summarize_one(
-    query: str, title: str | None, url: str, text: str, caveman: bool | None = None
+    query: str,
+    title: str | None,
+    url: str,
+    text: str,
+    mode: str | None = None,
+    caveman_variant: str = "v2",
 ) -> str:
     """Return summary, or '' on failure (caller falls back).
 
-    caveman=None follows the CAVEMAN_STYLE config; True/False forces the style.
+    mode=None follows the MODE config ("summary", "summary-caveman",
+    "original-caveman"). caveman_variant selects the caveman prompt
+    ("v2" telegraphic rules, "v1" legacy) for the caveman modes.
     """
     if not (text or "").strip():
         return ""
-    use_caveman = config.CAVEMAN_STYLE if caveman is None else caveman
+    use_mode = config.MODE if mode is None else mode
+    use_caveman = use_mode in ("summary-caveman", "original-caveman")
+    if use_caveman and caveman_variant == "v1":
+        system_prompt = CAVEMAN_LEGACY_SYSTEM_PROMPT
+    elif use_caveman:
+        system_prompt = CAVEMAN_SYSTEM_PROMPT
+    else:
+        system_prompt = SYSTEM_PROMPT
     endpoint = config.LLM_BASE_URL.rstrip("/") + "/chat/completions"
     body: dict = {
         "model": config.LLM_MODEL,
         "messages": [
-            {"role": "system", "content": CAVEMAN_SYSTEM_PROMPT if use_caveman else SYSTEM_PROMPT},
-            {"role": "user", "content": build_user_prompt(query, title, url, text, caveman=use_caveman)},
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": build_user_prompt(
+                    query, title, url, text, mode=use_mode, caveman_variant=caveman_variant
+                ),
+            },
         ],
         # NOTE: sampling params (temp/top-p/top-k) always come from the
         # inference engine defaults. max_tokens is only sent when positive;

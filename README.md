@@ -62,11 +62,13 @@ survives restarts:
 | `PROXY_API_KEY` | display only | `/search` accepts **any** API key (or none); value shown in admin UI only |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin`/`admin` | **Change these**; Basic auth for `/admin`, `/config` |
 | `LLM_PROVIDER` | `llamacpp` | `llamacpp` \| `vllm` \| `sglang`. Same chat API for all; only gates backend-specific options (slot pinning) |
+| `MODE` | `summary` | `summary` \| `summary-caveman` \| `original` \| `original-caveman`. `original` returns raw text with no LLM call; `*-caveman` uses telegraphic style |
+| `RETURN_IMAGE_URLS` | `false` | append page image URLs to the snippet body as text, so the downstream LLM can retrieve them |
+| `CAVEMAN_STYLE` | legacy | `true` behaves like `MODE=original-caveman` when `MODE` is unset |
 | `LLM_BASE_URL` | `http://10.0.0.187:8005/v1` | OpenAI-compatible base URL of your backend |
 | `LLM_MODEL` | `Muse-Glimmer-30B` | must match a backend model id (use Detect in `/admin`) |
 | `LLAMACPP_USE_SLOTS` | `false` | llama.cpp only: send `id_slot` to pin each job to one slot instead of any idle slot |
 | `LLAMACPP_SLOT_ID` | `1` | slot id, 1 or above (server slots are 0-based and wrap) |
-| `CAVEMAN_STYLE` | `false` | ultra-terse caveman-style summaries to save tokens |
 | `LLM_MAX_TOKENS` | `0` | cap per summary; `0`/negative omits it (server default = unlimited). Keep ≥1500 when set on reasoning backends: reasoning tokens come out of this budget; small values return empty content |
 | `LLM_TIMEOUT_SEC` | `300` | per-summary timeout; large reasoning models are slow |
 | `EXA_TEXT_MAX_CHARS` | `8000` | text chars requested per result from the search API |
