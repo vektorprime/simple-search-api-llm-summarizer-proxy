@@ -122,8 +122,8 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
     return SearchResult(link=url, title=title, snippet=snippet), debug
 
 
-# Global semaphore shared by ALL requests (not per-request), so llama.cpp
-# never sees more than MAX_CONCURRENT_SUMMARIES concurrent prompts.
+# Global semaphore shared by ALL requests (not per-request), so the LLM
+# backend never sees more than MAX_CONCURRENT_SUMMARIES concurrent prompts.
 # Rebuilt when the running loop or the configured size changes
 # (size is tunable at runtime via /admin).
 _global_sem: asyncio.Semaphore | None = None
