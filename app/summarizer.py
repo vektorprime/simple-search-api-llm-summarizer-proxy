@@ -68,38 +68,6 @@ CAVEMAN_SYSTEM_PROMPT = (
     "John defeated Bob cannot become John Bob defeated."
 )
 
-# Legacy v1 caveman prompt, kept only for A/B comparison in /debug/search.
-# Remove once a winner is picked.
-CAVEMAN_LEGACY_SYSTEM_PROMPT = (
-    "ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. "
-    'Still active if unsure. Off only: "stop caveman" / "normal mode".\n'
-    "\n"
-    "Rules\n"
-    "\n"
-    "Drop: articles (a/an/the), filler (just/really/basically/actually/simply), "
-    "pleasantries (sure/certainly/of course/happy to), hedging. Fragments OK. "
-    'Short synonyms (big not extensive, fix not "implement a solution for"). '
-    "Technical terms exact. Code blocks unchanged. Errors quoted exact.\n"
-    "\n"
-    "Pattern: [thing] [action] [reason]. [next step].\n"
-    "\n"
-    "Not: \"Sure! I'd be happy to help you with that. The issue you're "
-    "experiencing is likely caused by...\" Yes: \"Bug in auth middleware. "
-    "Token expiry check use < not <=. Fix:\"\n"
-    "\n"
-    "No filler/hedging. Keep articles + full sentences. Professional but tight\n"
-    "\n"
-    'Example — "Why React component re-render?"\n'
-    "\n"
-    '"Your component re-renders because you create a new object reference each '
-    'render. Wrap it in useMemo."\n'
-    "\n"
-    'Example — "Explain database connection pooling."\n'
-    "\n"
-    '"Connection pooling reuses open connections instead of creating new ones '
-    'per request. Avoids repeated handshake overhead."'
-)
-
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
@@ -109,22 +77,8 @@ def build_user_prompt(
     url: str,
     text: str,
     mode: str = "summary",
-    caveman_variant: str = "v2",
 ) -> str:
     clipped = (text or "")[: config.SUMMARY_INPUT_MAX_CHARS]
-    if mode == "original-caveman" and caveman_variant == "v1":
-        # Legacy shape (kept byte-stable for the v1 A/B arm).
-        task = (
-            "Task: Summarize page content above like caveman. "
-            "Very few words. Short sentences. Keep key facts."
-        )
-        return (
-            f"Search query: {query}\n"
-            f"Page title: {title or 'n/a'}\n"
-            f"Page URL: {url}\n\n"
-            f"Page content:\n{clipped}\n\n"
-            f"{task}"
-        )
     if mode == "original-caveman":
         # Full-rewrite mode: no meta header — the model otherwise echoes
         # the "Search query / Page title / Page URL" labels into the output.
@@ -171,21 +125,18 @@ async def summarize_one(
     url: str,
     text: str,
     mode: str | None = None,
-    caveman_variant: str = "v2",
 ) -> str:
     """Return summary, or '' on failure (caller falls back).
 
     mode=None follows the MODE config ("summary", "summary-caveman",
-    "original-caveman"). caveman_variant selects the caveman prompt
-    ("v2" telegraphic rules, "v1" legacy) for the caveman modes.
+    "original", "original-caveman"). The test UI forces explicit modes so
+    every pane follows the same rules as the Mode setting — no frozen copies.
     """
     if not (text or "").strip():
         return ""
     use_mode = config.MODE if mode is None else mode
     use_caveman = use_mode in ("summary-caveman", "original-caveman")
-    if use_caveman and caveman_variant == "v1":
-        system_prompt = CAVEMAN_LEGACY_SYSTEM_PROMPT
-    elif use_caveman:
+    if use_caveman:
         system_prompt = CAVEMAN_SYSTEM_PROMPT
     else:
         system_prompt = SYSTEM_PROMPT
@@ -196,9 +147,7 @@ async def summarize_one(
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
-                "content": build_user_prompt(
-                    query, title, url, text, mode=use_mode, caveman_variant=caveman_variant
-                ),
+                "content": build_user_prompt(query, title, url, text, mode=use_mode),
             },
         ],
         # NOTE: sampling params (temp/top-p/top-k) always come from the

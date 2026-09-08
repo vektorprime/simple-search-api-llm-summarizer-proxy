@@ -4,27 +4,23 @@ Proxy between **OpenWebUI** (engine `external`) and a **search API** (Exa by
 default) that returns **detailed LLM summaries** in `snippet` instead of raw
 page text.
 
+> **Admin web UI included:** open `/admin` on the running container
+> (e.g. `http://127.0.0.1:8555/admin`) — login `admin` / `admin`
+> (change `ADMIN_USER` / `ADMIN_PASS`). Every setting below can be viewed,
+> tested, and changed there; saves persist across restarts.
+
 ```
-OpenWebUI --POST /search {query,count}--> proxy --POST /search--> Search API
-  <--[{link,title,snippet=summary}]--  <--text+highlights--  Search API
-                                          --chat/completions--> LLM backend
-                                          <--summary-----------
+OpenWebUI                    SSALMP proxy               Search API + LLM
+   |  POST /search {query,count}  |                               |
+   |----------------------------->|  POST /search                 |
+   |                              |------------------------------>|
+   |                              |  <-- text + highlights        |
+   |                              |  POST /chat/completions       |
+   |                              |------------------------------>|
+   |                              |  <-- summary                  |
+   |  <-- [{link, title, snippet}] |                               |
+   |<-----------------------------|                               |
 ```
-
-## Endpoints
-
-| Method | Path | Auth | Purpose |
-|---|---|---|---|
-| POST | `/search` | any (or no) key | OpenWebUI external search |
-| POST | `/debug/search` | Basic `ADMIN_USER`/`ADMIN_PASS` | same pipeline + raw search fields per result (`exa_text`, `exa_highlights`, `snippet_source`, `comparison_summary`) for the admin side-by-side view |
-| GET | `/llm/models` | Basic `ADMIN_USER`/`ADMIN_PASS` | autodetect model ids from the backend's `/v1/models` (powers the Detect button + suggestions on the LLM model field) |
-| GET | `/healthz` | none | health + config summary |
-| GET | `/admin` | Basic `ADMIN_USER`/`ADMIN_PASS` (default `admin`/`admin`) | config web UI |
-| GET/POST | `/config` | same Basic | read/update config JSON |
-
-`/search` request: `{"query": "...", "count": 5}` →
-response: `[{"link","title","snippet"}]`. Failures return `[]` (OpenWebUI-safe).
-Per-result fallback: `LLM summary → search highlights → search text`.
 
 ## Quick start (docker compose, port 8555)
 
@@ -47,6 +43,27 @@ pip install -r requirements.txt
 export EXA_API_KEY=... LLM_BASE_URL=http://127.0.0.1:8005/v1
 uvicorn app.main:app --host 0.0.0.0 --port 8555
 ```
+
+## OpenWebUI setup
+
+`Admin Panel → Settings → Web Search`: Enable, engine `external`,
+URL `http://<ssalmp-host>:8555/search`, key = anything (proxy accepts any key).
+The admin UI shows the exact URL to paste.
+
+## Endpoints
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/search` | any (or no) key | OpenWebUI external search |
+| POST | `/debug/search` | Basic `ADMIN_USER`/`ADMIN_PASS` | same pipeline + raw search fields per result (`exa_text`, `exa_highlights`, `snippet_source`, `comparison_summary`) for the admin side-by-side view |
+| GET | `/llm/models` | Basic `ADMIN_USER`/`ADMIN_PASS` | autodetect model ids from the backend's `/v1/models` (powers the Detect button + suggestions on the LLM model field) |
+| GET | `/healthz` | none | health + config summary |
+| GET | `/admin` | Basic `ADMIN_USER`/`ADMIN_PASS` (default `admin`/`admin`) | config web UI |
+| GET/POST | `/config` | same Basic | read/update config JSON |
+
+`/search` request: `{"query": "...", "count": 5}` →
+response: `[{"link","title","snippet"}]`. Failures return `[]` (OpenWebUI-safe).
+Per-result fallback: `LLM summary → search highlights → search text`.
 
 ## Configuration
 
@@ -79,31 +96,6 @@ survives restarts:
 On first start with no `config.json`, a legacy `.env` file in the working
 directory is read once as the starting point (for upgrades from earlier
 versions).
-
-## OpenWebUI setup
-
-`Admin Panel → Settings → Web Search`: Enable, engine `external`,
-URL `http://<ssalmp-host>:8555/search`, key = anything (proxy accepts any key).
-The admin UI shows the exact URL to paste.
-
-## Example summarizer backend (llama.cpp)
-
-```bash
-export CUDA_VISIBLE_DEVICES=2,3
-nohup /home/user/llama.cpp/build/bin/llama-server \
- -m /home/user/models/Muse-Glimmer-30B/Muse-Glimmer-30B-UD-Q4_K_XL.gguf \
- --port 8005 --host 0.0.0.0 -a Muse-Glimmer-30B \
- --no-mmap --threads 8 --jinja \
- --flash-attn on -kvu -np 4 -sm layer -ngl 99 \
- -md /home/user/models/Muse-Glimmer-30B/dflash-kquant.gguf -ngld 99 \
- --spec-type draft-dflash --spec-draft-n-max 10 \
- --temp 1.0 --top-p 0.95 --top-k 64 \
- --reasoning on --reasoning-preserve \
- -mm /home/user/models/Muse-Glimmer-30B/mmproj-Muse-Glimmer-30B-BF16.gguf \
- -lv 4 &
-curl http://127.0.0.1:8005/health
-curl http://127.0.0.1:8005/v1/models
-```
 
 ## Tests
 

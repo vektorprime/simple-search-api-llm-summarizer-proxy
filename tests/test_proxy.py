@@ -367,13 +367,15 @@ async def test_mode_switches_prompt():
 
 
 @pytest.mark.asyncio
-async def test_caveman_v1_vs_v2_prompts():
+async def test_explicit_mode_overrides_config():
+    """summarize_one(mode=...) beats the configured MODE — lets the test UI
+    derive every pane from explicit modes instead of frozen prompt copies."""
     import json as _json
     import os
 
-    async def body_with(variant):
-        os.environ["LLM_BASE_URL"] = "http://llm:8005/v1"
-        os.environ.pop("MODE", None)
+    os.environ["LLM_BASE_URL"] = "http://llm:8005/v1"
+    os.environ["MODE"] = "summary"
+    try:
         import importlib
 
         import app.config as cfg
@@ -385,18 +387,9 @@ async def test_caveman_v1_vs_v2_prompts():
             route = respx.post("http://llm:8005/v1/chat/completions").mock(
                 return_value=Response(200, json={"choices": [{"message": {"content": "s"}}]})
             )
-            await sum_mod.summarize_one(
-                "q", "t", "http://x", "text", mode="original-caveman", caveman_variant=variant
-            )
-        return _json.loads(route.calls[0].request.content)
-
-    try:
-        v2 = await body_with("v2")
-        assert "Do not summarize or omit facts" in v2["messages"][0]["content"]
-        assert "Professional but tight" not in v2["messages"][0]["content"]
-        v1 = await body_with("v1")
-        assert "Professional but tight" in v1["messages"][0]["content"]
-        assert "Do not summarize or omit facts" not in v1["messages"][0]["content"]
+            await sum_mod.summarize_one("q", "t", "http://x", "text", mode="original-caveman")
+        body = _json.loads(route.calls[0].request.content)
+        assert "Do not summarize or omit facts" in body["messages"][0]["content"]
     finally:
         import os as _os
 
@@ -468,25 +461,24 @@ def test_debug_search_caveman_adds_comparison_summary():
         )
         llm = respx.post("http://llm:8005/v1/chat/completions").mock(
             side_effect=[
-                Response(200, json={"choices": [{"message": {"content": "CAVE V2"}}]}),
+                Response(200, json={"choices": [{"message": {"content": "CAVE"}}]}),
                 Response(200, json={"choices": [{"message": {"content": "Normal summary"}}]}),
-                Response(200, json={"choices": [{"message": {"content": "CAVE V1"}}]}),
             ]
         )
         r = client.post("/debug/search", json={"query": "q", "count": 1}, headers=_basic())
     assert r.status_code == 200
+    assert r.json()["mode"] == "original-caveman"
     item = r.json()["results"][0]
-    assert item["snippet"] == "CAVE V2"  # what OpenWebUI gets
-    assert item["comparison_summary"] == "Normal summary"  # middle pane
-    assert item["legacy_caveman_snippet"] == "CAVE V1"  # A/B pane
-    assert llm.call_count == 3
+    assert item["snippet"] == "CAVE"  # what OpenWebUI gets
+    assert item["comparison_summary"] == "Normal summary"  # bottom pane
+    assert "legacy_caveman_snippet" not in item  # no frozen copies anymore
+    assert llm.call_count == 2
     import json as _json
 
     bodies = [_json.loads(c.request.content) for c in llm.calls]
-    assert "Do not summarize or omit facts" in bodies[0]["messages"][0]["content"]  # v2
-    assert "caveman" not in bodies[1]["messages"][0]["content"].lower()  # normal
+    assert "Do not summarize or omit facts" in bodies[0]["messages"][0]["content"]
+    assert "caveman" not in bodies[1]["messages"][0]["content"].lower()  # normal rules
     assert "caveman" not in bodies[1]["messages"][1]["content"].lower()
-    assert "Professional but tight" in bodies[2]["messages"][0]["content"]  # v1 legacy
     import os as _os
 
     _os.environ.pop("MODE", None)  # don't leak into other tests

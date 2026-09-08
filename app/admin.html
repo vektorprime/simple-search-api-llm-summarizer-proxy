@@ -108,7 +108,7 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;margin-top:1.5rem}
 
   <div class="card">
     <h2>Test search <span class="tag">live A/B</span></h2>
-    <p class="desc">Runs the live pipeline in the current Mode. Left is always the Original raw text. Right is the Summary — or the raw text itself in original mode. Caveman modes add a bottom row comparing the sent variant against the legacy v1 prompt. Every pane shows its character count.</p>
+    <p class="desc">Runs the live pipeline in the current Mode. Left is always the Original raw text; right is exactly what OpenWebUI receives, named by mode. Non-summary modes add the Summary-rules variant below for comparison — all panes derive from the live Mode rules, no frozen copies. Every pane shows its character count.</p>
     <div class="rowflex">
       <input type="text" id="q" value="What is the Eiffel Tower?"/>
       <input type="number" id="n" value="2" min="1" max="10"/>
@@ -367,13 +367,13 @@ async function test(){
         item.exa_highlights.forEach(h => { const li = document.createElement('li'); li.textContent = h; ul.appendChild(li); });
         left.appendChild(ul);
       }
-      // RIGHT: summary. With caveman modes on this is the normal-style
-      // comparison; in original mode it is the raw text actually sent.
+      // RIGHT: exactly what OpenWebUI receives in the current mode.
       const right = document.createElement('div'); right.className = 'pane';
       const rh = document.createElement('h3');
-      const showCaveman = item.comparison_summary != null;
-      const rightText = showCaveman ? item.comparison_summary : (item.snippet || '');
-      rh.textContent = showCaveman ? 'Summary ' : (mode === 'original' ? 'Original → OpenWebUI ' : 'Summary → OpenWebUI ');
+      const showComparison = item.comparison_summary != null;
+      const rightText = item.snippet || '';
+      const sentName = {summary:'Summary', original:'Original', 'summary-caveman':'Summary with caveman', 'original-caveman':'Original with caveman'}[mode] || mode;
+      rh.textContent = sentName + ' → OpenWebUI ';
       const rcnt = document.createElement('span'); rcnt.className = 'cnt';
       rcnt.textContent = '· ' + rightText.length.toLocaleString() + ' chars';
       rh.appendChild(rcnt); right.appendChild(rh);
@@ -382,26 +382,18 @@ async function test(){
       right.appendChild(rb);
 
       cmp.appendChild(left); cmp.appendChild(right); card.appendChild(cmp);
-      // BOTTOM (caveman mode only): A/B of new (v2, actually sent) vs old (v1).
-      if(showCaveman){
-        const ab = document.createElement('div'); ab.className = 'compare'; ab.style.marginTop = '.8rem';
-        const mkPane = (title, txt, tip) => {
-          const p = document.createElement('div'); p.className = 'pane';
-          const h = document.createElement('h3'); h.textContent = title + ' ';
-          if(tip) h.title = tip;
-          const c = document.createElement('span'); c.className = 'cnt';
-          c.textContent = '· ' + txt.length.toLocaleString() + ' chars';
-          h.appendChild(c); p.appendChild(h);
-          const b = document.createElement('div'); b.className = 'body';
-          b.textContent = txt || '(empty)'; p.appendChild(b);
-          return p;
-        };
-        const sentTitle = mode === 'summary-caveman'
-          ? 'Summary with caveman → OpenWebUI (snippet)'
-          : 'Original with caveman → OpenWebUI (snippet)';
-        ab.appendChild(mkPane(sentTitle, item.snippet || ''));
-        ab.appendChild(mkPane('Summary with caveman', item.legacy_caveman_snippet || '', 'Legacy v1 caveman prompt, kept for comparison'));
-        card.appendChild(ab);
+      // BOTTOM (any non-summary mode): the same content summarized with the
+      // Summary mode rules, for direct comparison. Same rules as the Mode
+      // setting — no frozen copies.
+      if(showComparison){
+        const bottom = document.createElement('div'); bottom.className = 'pane'; bottom.style.marginTop = '.8rem';
+        const bh = document.createElement('h3'); bh.textContent = 'Summary (for comparison) ';
+        const bcnt = document.createElement('span'); bcnt.className = 'cnt';
+        bcnt.textContent = '· ' + item.comparison_summary.length.toLocaleString() + ' chars';
+        bh.appendChild(bcnt); bottom.appendChild(bh);
+        const bb = document.createElement('div'); bb.className = 'body';
+        bb.textContent = item.comparison_summary;
+        bottom.appendChild(bb); card.appendChild(bottom);
       }
       box.appendChild(card);
     });

@@ -247,12 +247,12 @@ async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> J
     """Admin-only: full pipeline trace per result.
 
     Returns {"mode": ..., "results": [{link, title, snippet, snippet_source,
-    exa_text, exa_highlights, image_urls, comparison_summary,
-    legacy_caveman_snippet}]} so the admin UI can show the raw search API
-    result next to the summary returned to OpenWebUI. In caveman modes,
-    `snippet` is the caveman variant actually sent, `comparison_summary` is
-    an extra normal-style summary, and `legacy_caveman_snippet` the v1 text
-    for old-vs-new comparison (nulls otherwise).
+    exa_text, exa_highlights, image_urls, comparison_summary}]} so the admin
+    UI can show the raw original next to exactly what OpenWebUI receives.
+    `comparison_summary` is a normal-style summary computed with the same
+    rules as the Summary mode (null when already in summary/original modes
+    with nothing to compare). There are no frozen prompt copies anywhere:
+    every pane is produced from the live MODE rules.
     """
     if not req.query.strip():
         return JSONResponse(content={"results": []})
@@ -275,43 +275,33 @@ async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> J
         log.warning("debug summarization pipeline failed: %s", e)
         return JSONResponse(content={"results": [], "error": str(e)})
     results = [dbg for r, dbg in pairs if r.link]
-    caveman_mode = config.MODE in ("summary-caveman", "original-caveman")
-    if caveman_mode:
-        # Extra variants so the UI can A/B: normal-style summary for the
-        # middle pane + legacy-v1 caveman for the old-vs-new comparison.
+    if config.MODE == "summary":
+        for dbg in results:
+            dbg["comparison_summary"] = None
+    else:
+        # One extra normal-style summary per result so the UI can compare
+        # the current mode's output against the Summary mode rules.
         # Reuses the global single-flight semaphore.
-        async def _variants(dbg: dict) -> None:
+        async def _comparison(dbg: dict) -> None:
             text = dbg.get("exa_text") or ""
             if not text.strip():
                 dbg["comparison_summary"] = None
-                dbg["legacy_caveman_snippet"] = None
                 return
             async with _global_summary_sem():
                 normal = await summarize_one(
                     req.query, dbg.get("title"), dbg.get("link") or "", text, mode="summary"
                 )
-            async with _global_summary_sem():
-                legacy = await summarize_one(
-                    req.query, dbg.get("title"), dbg.get("link") or "", text,
-                    mode="original-caveman", caveman_variant="v1",
-                )
             dbg["comparison_summary"] = normal or None
-            dbg["legacy_caveman_snippet"] = legacy or None
 
         try:
             await asyncio.wait_for(
-                asyncio.gather(*(_variants(dbg) for dbg in results)),
+                asyncio.gather(*(_comparison(dbg) for dbg in results)),
                 timeout=config.REQUEST_TIMEOUT_SEC,
             )
         except Exception as e:
             log.warning("debug comparison summaries failed: %s", e)
             for dbg in results:
                 dbg.setdefault("comparison_summary", None)
-                dbg.setdefault("legacy_caveman_snippet", None)
-    else:
-        for dbg in results:
-            dbg["comparison_summary"] = None
-            dbg["legacy_caveman_snippet"] = None
     return JSONResponse(content={"mode": config.MODE, "results": results})
 
 
