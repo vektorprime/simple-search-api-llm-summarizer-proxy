@@ -254,12 +254,13 @@ async def test_max_tokens_positive_is_sent():
     assert body["max_tokens"] == 2000
 
 
-async def _summarize_body(env):
+async def _summarize_body(env, **kwargs):
     import json as _json
     import os
 
     os.environ.update(env)
-    for var in ("LLM_PROVIDER", "LLAMACPP_USE_SLOTS", "LLAMACPP_SLOT_ID", "MODE"):
+    for var in ("LLM_PROVIDER", "LLAMACPP_USE_SLOTS", "LLAMACPP_SLOT_COUNT",
+                "LLAMACPP_SLOT_ID", "MODE"):
         if var not in env:
             os.environ.pop(var, None)
     import importlib
@@ -273,42 +274,80 @@ async def _summarize_body(env):
         route = respx.post("http://llm:8005/v1/chat/completions").mock(
             return_value=Response(200, json={"choices": [{"message": {"content": "s"}}]})
         )
-        await sum_mod.summarize_one("q", "t", "http://x", "some page text")
+        await sum_mod.summarize_one("q", "t", "http://x", "some page text", **kwargs)
     return _json.loads(route.calls[0].request.content), cfg
 
 
 @pytest.mark.asyncio
-async def test_slot_id_sent_for_llamacpp_when_enabled():
+async def test_slot_id_sent_when_provided_omitted_otherwise():
     body, _ = await _summarize_body(
-        {"LLM_BASE_URL": "http://llm:8005/v1", "LLM_PROVIDER": "llamacpp",
-         "LLAMACPP_USE_SLOTS": "true", "LLAMACPP_SLOT_ID": "2"}
+        {"LLM_BASE_URL": "http://llm:8005/v1"}, slot_id=2
     )
     assert body["id_slot"] == 2
-
-
-@pytest.mark.asyncio
-async def test_slot_id_omitted_unless_llamacpp_and_enabled():
-    body, _ = await _summarize_body(
-        {"LLM_BASE_URL": "http://llm:8005/v1", "LLM_PROVIDER": "llamacpp",
-         "LLAMACPP_USE_SLOTS": "false", "LLAMACPP_SLOT_ID": "2"}
-    )
-    assert "id_slot" not in body
-    body, _ = await _summarize_body(
-        {"LLM_BASE_URL": "http://llm:8005/v1", "LLM_PROVIDER": "vllm",
-         "LLAMACPP_USE_SLOTS": "true", "LLAMACPP_SLOT_ID": "2"}
-    )
-    assert "id_slot" not in body
-    body, _ = await _summarize_body(
-        {"LLM_BASE_URL": "http://llm:8005/v1", "LLM_PROVIDER": "sglang",
-         "LLAMACPP_USE_SLOTS": "true", "LLAMACPP_SLOT_ID": "2"}
-    )
+    body, _ = await _summarize_body({"LLM_BASE_URL": "http://llm:8005/v1"})
     assert "id_slot" not in body
 
 
-def test_llamacpp_slot_defaults_and_bool_parsing():
+def _reload_main():
+    import importlib
+
+    import app.main as main_mod
+
+    importlib.reload(main_mod)
+    return main_mod
+
+
+def test_slot_rotation_cycles_pool_in_order():
     import os
 
-    for var in ("LLM_PROVIDER", "LLAMACPP_USE_SLOTS", "LLAMACPP_SLOT_ID"):
+    os.environ.update(
+        {"LLM_PROVIDER": "llamacpp", "LLAMACPP_USE_SLOTS": "true",
+         "LLAMACPP_SLOT_COUNT": "2"}
+    )
+    os.environ.pop("LLAMACPP_SLOT_ID", None)
+    try:
+        import app.config as cfg
+        import importlib
+
+        importlib.reload(cfg)
+        main_mod = _reload_main()
+        main_mod._slot_counter = 0
+        assert [main_mod._rotated_slot_id() for _ in range(5)] == [0, 1, 0, 1, 0]
+    finally:
+        for var in ("LLM_PROVIDER", "LLAMACPP_USE_SLOTS", "LLAMACPP_SLOT_COUNT"):
+            os.environ.pop(var, None)
+
+
+def test_slot_rotation_off_unless_llamacpp_and_managed():
+    import os
+
+    try:
+        import app.config as cfg
+        import importlib
+
+        os.environ.update(
+            {"LLM_PROVIDER": "llamacpp", "LLAMACPP_USE_SLOTS": "false",
+             "LLAMACPP_SLOT_COUNT": "4"}
+        )
+        os.environ.pop("LLAMACPP_SLOT_ID", None)
+        importlib.reload(cfg)
+        main_mod = _reload_main()
+        assert main_mod._rotated_slot_id() is None
+        os.environ.update({"LLM_PROVIDER": "vllm", "LLAMACPP_USE_SLOTS": "true"})
+        importlib.reload(cfg)
+        main_mod = _reload_main()
+        assert main_mod._rotated_slot_id() is None
+    finally:
+        for var in ("LLM_PROVIDER", "LLAMACPP_USE_SLOTS", "LLAMACPP_SLOT_COUNT",
+                    "LLAMACPP_SLOT_ID"):
+            os.environ.pop(var, None)
+
+
+def test_llamacpp_slot_defaults_bool_parsing_and_legacy_id():
+    import os
+
+    for var in ("LLM_PROVIDER", "LLAMACPP_USE_SLOTS", "LLAMACPP_SLOT_COUNT",
+                "LLAMACPP_SLOT_ID"):
         os.environ.pop(var, None)
     import importlib
 
@@ -317,13 +356,20 @@ def test_llamacpp_slot_defaults_and_bool_parsing():
     importlib.reload(cfg)
     assert cfg.LLM_PROVIDER == "llamacpp"
     assert cfg.LLAMACPP_USE_SLOTS is False
-    assert cfg.LLAMACPP_SLOT_ID == 1
+    assert cfg.LLAMACPP_SLOT_COUNT == 1
     assert cfg.update_config({"LLAMACPP_USE_SLOTS": "true"}) == ["LLAMACPP_USE_SLOTS"]
     assert cfg.LLAMACPP_USE_SLOTS is True
     cfg.update_config({"LLAMACPP_USE_SLOTS": "false"})
     assert cfg.LLAMACPP_USE_SLOTS is False
     cfg.update_config({"LLM_PROVIDER": "VLLM"})
     assert cfg.LLM_PROVIDER == "vllm"
+    # legacy single slot id migrates to a pool covering 0..id
+    os.environ["LLAMACPP_SLOT_ID"] = "2"
+    try:
+        importlib.reload(cfg)
+        assert cfg.LLAMACPP_SLOT_COUNT == 3
+    finally:
+        os.environ.pop("LLAMACPP_SLOT_ID", None)
 
 
 @pytest.mark.asyncio
@@ -517,6 +563,54 @@ def test_llm_models_backend_down_returns_502():
         )
         r = client.get("/llm/models", headers=_basic())
     assert r.status_code == 502
+
+
+def test_llm_slots_lists_pool_and_strips_v1():
+    client, _ = _client(
+        LLM_BASE_URL="http://llm:8005/v1",
+        ADMIN_USER="admin",
+        ADMIN_PASS="admin",
+    )
+    assert client.get("/llm/slots").status_code == 401
+    with respx.mock:
+        route = respx.get("http://llm:8005/slots").mock(
+            return_value=Response(
+                200,
+                json=[
+                    {"id": 0, "is_processing": False},
+                    {"id": 1, "is_processing": True},
+                    {"id": 2, "is_processing": False},
+                ],
+            )
+        )
+        r = client.get("/llm/slots", headers=_basic())
+    assert r.status_code == 200
+    assert route.called  # /v1 stripped: queried server-native /slots
+    assert r.json()["count"] == 3
+    assert r.json()["slots"][1] == {"id": 1, "busy": True}
+
+
+def test_llm_slots_backend_down_returns_502():
+    client, _ = _client(
+        LLM_BASE_URL="http://llm:8005/v1",
+        ADMIN_USER="admin",
+        ADMIN_PASS="admin",
+    )
+    with respx.mock:
+        respx.get("http://llm:8005/slots").mock(
+            return_value=Response(404, json={"error": "not found"})
+        )
+        r = client.get("/llm/slots", headers=_basic())
+    assert r.status_code == 502
+
+
+def test_admin_slot_minisection_present():
+    client, _ = _client(ADMIN_USER="admin", ADMIN_PASS="admin")
+    r = client.get("/admin", headers=_basic())
+    assert r.status_code == 200
+    assert "LlamaCPP slot IDs" in r.text
+    assert "Manage slots" in r.text
+    assert "Available slots" in r.text
 
 
 def _reload_config():

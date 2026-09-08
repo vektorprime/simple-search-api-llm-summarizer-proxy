@@ -95,11 +95,31 @@ LLM_MODEL: str = _get("LLM_MODEL", "Muse-Glimmer-30B")
 LLM_API_KEY: str = _get("LLM_API_KEY", "sk-no-key-required")
 LLM_TIMEOUT_SEC: int = _get_int("LLM_TIMEOUT_SEC", 300)
 LLM_MAX_TOKENS: int = _get_int("LLM_MAX_TOKENS", 0)
-# llama.cpp slot pinning: only used when provider == llamacpp and enabled.
-# Sends id_slot so the backend places the job on a specific slot
-# (server slots are 0-based and wrap; -1 = any idle slot).
+# llama.cpp slot management: only used when provider == llamacpp and enabled.
+# Instead of pinning one slot, the proxy rotates each job across the first
+# LLAMACPP_SLOT_COUNT slots (0-based ids 0..N-1; out-of-range wraps server-side).
+# A job pinned to a busy slot simply waits its turn (server defers, no error).
 LLAMACPP_USE_SLOTS: bool = _get_bool("LLAMACPP_USE_SLOTS", False)
-LLAMACPP_SLOT_ID: int = _get_int("LLAMACPP_SLOT_ID", 1)
+
+
+def _resolve_slot_count() -> int:
+    raw = _raw("LLAMACPP_SLOT_COUNT")
+    if raw is not None:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    legacy = _raw("LLAMACPP_SLOT_ID")  # pre-rotation single slot id
+    if legacy is not None:
+        try:
+            # pinned id N implies a pool of at least N+1 slots (0..N)
+            return max(1, int(legacy) + 1)
+        except ValueError:
+            pass
+    return 1
+
+
+LLAMACPP_SLOT_COUNT: int = _resolve_slot_count()
 # Caveman style: ultra-terse summaries to save tokens.
 # (Superseded by MODE below, but still read for backwards compatibility.)
 _LEGACY_CAVEMAN: bool = _get_bool("CAVEMAN_STYLE", False)
@@ -157,7 +177,7 @@ _EDITABLE_STR = (
 _EDITABLE_INT = (
     "LLM_TIMEOUT_SEC",
     "LLM_MAX_TOKENS",
-    "LLAMACPP_SLOT_ID",
+    "LLAMACPP_SLOT_COUNT",
     "EXA_TIMEOUT_SEC",
     "EXA_TEXT_MAX_CHARS",
     "MAX_CONCURRENT_SUMMARIES",

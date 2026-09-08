@@ -56,6 +56,7 @@ The admin UI shows the exact URL to paste.
 | POST | `/search` | any (or no) key | OpenWebUI external search |
 | POST | `/debug/search` | Basic `ADMIN_USER`/`ADMIN_PASS` | same pipeline + raw search fields per result (`exa_text`, `exa_highlights`, `snippet_source`, `comparison_summary`) for the admin side-by-side view |
 | GET | `/llm/models` | Basic `ADMIN_USER`/`ADMIN_PASS` | autodetect model ids from the backend's `/v1/models` (powers the Detect button + suggestions on the LLM model field) |
+| GET | `/llm/slots` | Basic `ADMIN_USER`/`ADMIN_PASS` | list llama.cpp slots from server-native `GET /slots` (powers the Detect button on available slots) |
 | GET | `/healthz` | none | health + config summary |
 | GET | `/admin` | Basic `ADMIN_USER`/`ADMIN_PASS` (default `admin`/`admin`) | config web UI |
 | GET/POST | `/config` | same Basic | read/update config JSON |
@@ -83,8 +84,8 @@ survives restarts:
 | `CAVEMAN_STYLE` | legacy | `true` behaves like `MODE=original-caveman` when `MODE` is unset |
 | `LLM_BASE_URL` | `http://10.0.0.187:8005/v1` | OpenAI-compatible base URL of your backend |
 | `LLM_MODEL` | `Muse-Glimmer-30B` | must match a backend model id (use Detect in `/admin`) |
-| `LLAMACPP_USE_SLOTS` | `false` | llama.cpp only: send `id_slot` to pin each job to one slot instead of any idle slot |
-| `LLAMACPP_SLOT_ID` | `1` | slot id, 1 or above (server slots are 0-based and wrap) |
+| `LLAMACPP_USE_SLOTS` | `false` | llama.cpp only: rotate each job across the slot pool (`id_slot` 0..N-1) instead of auto-assign; a job on a busy slot waits its turn |
+| `LLAMACPP_SLOT_COUNT` | `1` | pool size for rotation: N slots = ids 0..N-1. Click Detect in `/admin` to read the live count from `GET /slots` (legacy `LLAMACPP_SLOT_ID=N` migrates to a pool of N+1) |
 | `LLM_MAX_TOKENS` | `0` | cap per summary; `0`/negative omits it (server default = unlimited). Keep ≥1500 when set on reasoning backends: reasoning tokens come out of this budget; small values return empty content |
 | `LLM_TIMEOUT_SEC` | `300` | per-summary timeout; large reasoning models are slow |
 | `EXA_TEXT_MAX_CHARS` | `0` | chars fetched per result; `0` = unlimited (omit the cap) |

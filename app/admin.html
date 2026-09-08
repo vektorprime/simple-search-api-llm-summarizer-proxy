@@ -40,6 +40,8 @@ details.adv{margin-top:.9rem;border:1px dashed var(--line);border-radius:8px;pad
 details.adv summary{cursor:pointer;font-weight:600;font-size:.88rem;color:var(--muted)}
 details.adv summary:hover{color:var(--accent)}
 details.adv .grid{margin-top:.7rem}
+.subsection{margin-top:.9rem;border:1px solid var(--line);border-radius:8px;padding:.7rem .9rem;background:#fbfcfe}
+.subsection h3{font-size:.9rem;margin:.1rem 0 .7rem}
 .actions{position:sticky;bottom:0;display:flex;gap:.6rem;align-items:center;background:rgba(255,255,255,.96);border:1px solid var(--line);border-radius:12px;padding:.7rem .9rem;margin:0 0 1rem}
 button{font-size:.95rem;border-radius:8px;padding:.6rem 1.2rem;cursor:pointer;border:1px solid transparent}
 button.primary{background:var(--accent);color:#fff;font-weight:600}
@@ -140,8 +142,8 @@ const GROUPS = [
     LLM_MAX_TOKENS:{label:"Max tokens / summary", hint:"0 = unlimited. If capped, keep ≥1500.", tip:"Per-summary cap sent as max_tokens. 0 (default) omits it, leaving the backend default (llama.cpp: unlimited). Reasoning models spend thinking tokens from this same budget — verified: small caps return EMPTY content with finish_reason=length. Applies to every summary call, including A/B variants.", type:"number"},
     MODE:{label:"Mode", hint:"What OpenWebUI receives for each result.", tip:"summary: detailed LLM summary (1 LLM call per result). summary with caveman: the same detailed summary, written in telegraphic style (1 call). original: raw search text verbatim, zero LLM calls. original with caveman: full telegraphic rewrite, nothing omitted (1 call). Failed LLM calls fall back to highlights, then raw text.", type:"select", options:[["summary","Summary"],["summary-caveman","Summary with caveman"],["original","Original (no changes)"],["original-caveman","Original with caveman"]]},
     RETURN_IMAGE_URLS:{label:"Return image URLs in body as text", hint:"Append page image URLs to the snippet as plain text.", tip:"Collects the result's representative image plus any markdown-embedded image URLs and appends an 'Images on page' list AFTER the snippet body, in every mode — the URLs are never summarized away and the downstream LLM can fetch them. Costs no extra LLM calls.", type:"checkbox"},
-    LLAMACPP_USE_SLOTS:{label:"Use slots (pin job to a slot)", hint:"Pin each job to one llama.cpp slot.", tip:"Sends id_slot with every summary call so the backend queues onto a fixed slot instead of any idle one (omitted = -1 = auto-assign). Read only when the provider is llama.cpp. Pinning serializes server-side, which matches single-flight; raise concurrency only if the engine truly runs jobs in parallel.", type:"checkbox"},
-    LLAMACPP_SLOT_ID:{label:"Slot ID", hint:"Whole number, 1 or above.", tip:"The id_slot value sent when slot pinning is on. Server slots are 0-based and out-of-range ids wrap around (4 → slot 0 with 4 slots), so 1 addresses the second slot. The number box enforces a minimum of 1.", type:"number", min:1}
+    LLAMACPP_USE_SLOTS:{label:"Manage slots", hint:"Rotate each job across the available slots.", tip:"When on, every dispatched summary job is assigned the next slot id in 0..N-1 (round-robin), so concurrent jobs land on different slots instead of piling onto one. A job that lands on a busy slot simply waits its turn — the server defers it, no error. Read only when the provider is llama.cpp.", type:"checkbox", mini:"LlamaCPP slot IDs"},
+    LLAMACPP_SLOT_COUNT:{label:"Available slots", hint:"How many slot IDs to rotate across (N slots = ids 0..N-1).", tip:"Pool size for rotation: jobs cycle through slot ids 0 to N-1. Must not exceed the server's real slot count (--parallel); out-of-range ids wrap around server-side. Click Detect to read the live count from the backend, or type it manually (whole number, 1 or above).", type:"number", min:1, mini:"LlamaCPP slot IDs"}
   }},
   {title:"Timeouts", tag:"seconds", desc:"How long the proxy waits before falling back.", fields:{
     LLM_TIMEOUT_SEC:{label:"Per-summary timeout", hint:"Timeout for one summary call.", tip:"Large reasoning models need minutes — a detailed summary measured 30–60s on 2× RTX 3080. On timeout that single result falls back to highlights/raw text while the rest of the search continues.", type:"number"},
@@ -204,6 +206,8 @@ function buildForm(cfg){
     const d = document.createElement('p'); d.className = 'desc'; d.textContent = g.desc;
     card.appendChild(d);
     const grid = document.createElement('div'); grid.className = 'grid';
+    const miniGroups = {};
+    const miniId = (title) => 'sub_' + title.replace(/\W+/g, '_').toLowerCase();
     const advKeys = new Set(g.advanced || []);
     let advBox = null, advGrid = null;
     const fieldTarget = (key) => {
@@ -260,27 +264,46 @@ function buildForm(cfg){
         det.onclick = () => detectModels(false);
         wrap.appendChild(det);
       }
+      if(key === 'LLAMACPP_SLOT_COUNT'){
+        const det = document.createElement('button');
+        det.type = 'button'; det.className = 'ghost small'; det.textContent = 'Detect';
+        det.title = 'Read the live slot count from the llama.cpp backend';
+        det.style.marginTop = '.35rem';
+        det.onclick = () => detectSlots(false);
+        wrap.appendChild(det);
+      }
       if(meta.hint){ const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = meta.hint; wrap.appendChild(hint); }
-      fieldTarget(key).appendChild(wrap);
+      if(meta.mini){
+        (miniGroups[meta.mini] = miniGroups[meta.mini] || []).push(wrap);
+      } else {
+        fieldTarget(key).appendChild(wrap);
+      }
     });
     card.appendChild(grid);
+    Object.entries(miniGroups).forEach(([title, wraps]) => {
+      const sub = document.createElement('div'); sub.className = 'subsection'; sub.id = miniId(title);
+      const sh = document.createElement('h3'); sh.textContent = title; sub.appendChild(sh);
+      const sg = document.createElement('div'); sg.className = 'grid';
+      wraps.forEach(w => sg.appendChild(w));
+      sub.appendChild(sg); card.appendChild(sub);
+    });
     if(advBox) card.appendChild(advBox);
     host.appendChild(card);
   });
   refreshLlamaCpp();
 }
 
-// llama.cpp slot controls only make sense for the llama.cpp provider:
-// the "use slots" row shows only then, and the slot number box is
-// enabled only while "use slots" is checked.
+// The "LlamaCPP slot IDs" mini-section only makes sense for the llama.cpp
+// provider: it shows only then, and the available-slots box is enabled
+// only while "manage slots" is checked.
 function refreshLlamaCpp(){
   const prov = document.getElementById('cfg_LLM_PROVIDER');
   const box = document.getElementById('cfg_LLAMACPP_USE_SLOTS');
-  const num = document.getElementById('cfg_LLAMACPP_SLOT_ID');
+  const num = document.getElementById('cfg_LLAMACPP_SLOT_COUNT');
+  const sub = document.getElementById('sub_llamacpp_slot_ids');
   if(!prov || !box || !num) return;
   const isLlama = prov.value === 'llamacpp';
-  document.getElementById('row_LLAMACPP_USE_SLOTS').style.display = isLlama ? '' : 'none';
-  document.getElementById('row_LLAMACPP_SLOT_ID').style.display = isLlama ? '' : 'none';
+  if(sub) sub.style.display = isLlama ? '' : 'none';
   num.disabled = !box.checked;
 }
 
@@ -340,6 +363,22 @@ async function detectModels(quiet){
       else say('info', 'Backend answered but listed no models.');
     }
   }catch(e){ if(!quiet) say('err', 'Model detect failed: ' + e.message); }
+}
+
+// Read the live llama.cpp slot pool (GET /slots, proxied via /llm/slots)
+// and write the count into the available-slots field.
+async function detectSlots(quiet){
+  try{
+    const r = await fetch('/llm/slots');
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+    const inp = document.getElementById('cfg_LLAMACPP_SLOT_COUNT');
+    if(inp) inp.value = data.count;
+    if(!quiet){
+      const busy = (data.slots || []).filter(s => s.busy).length;
+      say('ok', 'Detected ' + data.count + ' slot(s) (' + busy + ' busy) — available slots set to ' + data.count + '.');
+    }
+  }catch(e){ if(!quiet) say('err', 'Slot detect failed: ' + e.message); }
 }
 
 async function test(){

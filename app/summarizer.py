@@ -127,12 +127,13 @@ async def summarize_one(
     url: str,
     text: str,
     mode: str | None = None,
+    slot_id: int | None = None,
 ) -> str:
     """Return summary, or '' on failure (caller falls back).
 
-    mode=None follows the MODE config ("summary", "summary-caveman",
-    "original", "original-caveman"). The test UI forces explicit modes so
-    every pane follows the same rules as the Mode setting — no frozen copies.
+    mode=None follows the MODE config. slot_id is sent as llama.cpp id_slot
+    when provided (the caller rotates it across the slot pool); None omits
+    the key so the server auto-assigns an idle slot (-1).
     """
     if not (text or "").strip():
         return ""
@@ -162,9 +163,10 @@ async def summarize_one(
         # Headroom matters: server runs --reasoning on, reasoning tokens
         # come out of this budget; small values return empty content.
         body["max_tokens"] = config.LLM_MAX_TOKENS
-    if config.LLM_PROVIDER == "llamacpp" and config.LLAMACPP_USE_SLOTS:
-        # Pin the job to a specific llama.cpp slot (id_slot; -1 = any idle).
-        body["id_slot"] = int(config.LLAMACPP_SLOT_ID)
+    if slot_id is not None:
+        # Rotated pool slot (0-based). A job landing on a busy slot simply
+        # waits its turn — the server defers it, no error.
+        body["id_slot"] = int(slot_id)
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {config.LLM_API_KEY}",

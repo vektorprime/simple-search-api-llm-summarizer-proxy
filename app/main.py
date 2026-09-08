@@ -97,6 +97,7 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
     highlights = item.get("highlights") if isinstance(item.get("highlights"), list) else []
     image_urls = _image_urls(item) if config.RETURN_IMAGE_URLS else []
     snippet, source = "", "empty"
+    slot_id: int | None = None
     if use_mode == "original":
         if text.strip():
             snippet, source = text, "original"
@@ -104,9 +105,14 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
         # Global single-flight: only MAX_CONCURRENT_SUMMARIES summaries run
         # against the backend at once (default 1); everything else queues here.
         async with _global_summary_sem():
-            snippet = await summarize_one(query, title, url, text, mode=use_mode)
+            slot_id = _rotated_slot_id()
+            snippet = await summarize_one(
+                query, title, url, text, mode=use_mode, slot_id=slot_id
+            )
         if snippet:
             source = "llm"
+    else:
+        slot_id = None
     if not snippet:
         snippet, source = _fallback_snippet(item)
     snippet = _with_images(snippet, image_urls)
@@ -115,11 +121,29 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
         "title": title,
         "snippet": snippet,
         "snippet_source": source,
+        "slot_id": slot_id,
         "exa_text": text,
         "exa_highlights": highlights,
         "image_urls": image_urls,
     }
     return SearchResult(link=url, title=title, snippet=snippet), debug
+
+
+# llama.cpp slot rotation: each dispatched job takes the next id in
+# 0..SLOT_COUNT-1, so concurrent jobs land on different slots instead of
+# piling onto one. A job hitting a busy slot waits its turn server-side.
+_slot_counter = 0
+
+
+def _rotated_slot_id() -> int | None:
+    """Next pool slot, or None when slot management is off / N/A."""
+    global _slot_counter
+    if config.LLM_PROVIDER != "llamacpp" or not config.LLAMACPP_USE_SLOTS:
+        return None
+    n = max(1, config.LLAMACPP_SLOT_COUNT)
+    slot = _slot_counter % n
+    _slot_counter += 1
+    return slot
 
 
 # Global semaphore shared by ALL requests (not per-request), so the LLM
@@ -209,6 +233,39 @@ async def llm_models(_: None = Depends(_check_admin)) -> JSONResponse:
         raise HTTPException(status_code=502, detail=f"Could not list models: {e}")
 
 
+@app.get("/llm/slots")
+async def llm_slots(_: None = Depends(_check_admin)) -> JSONResponse:
+    """Admin-only: list llama.cpp slots (id + busy state) for the Detect button.
+
+    llama.cpp serves this natively at GET /slots (no /v1 prefix), so the
+    trailing /v1 is stripped from the base URL. Other backends 404 → 502.
+    Returns {"count": N, "slots": [{"id": 0, "busy": false}, ...]}.
+    Slot ids are 0-based.
+    """
+    base = config.LLM_BASE_URL.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    url = base + "/slots"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                url, headers={"Authorization": f"Bearer {config.LLM_API_KEY}"}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        if not isinstance(data, list):
+            raise ValueError("unexpected /slots shape")
+        slots = [
+            {"id": s.get("id"), "busy": bool(s.get("is_processing"))}
+            for s in data
+            if isinstance(s, dict) and isinstance(s.get("id"), int)
+        ]
+        return JSONResponse(content={"count": len(slots), "slots": slots, "slots_url": url})
+    except Exception as e:
+        log.warning("llm slot detect failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"Could not list slots: {e}")
+
+
 @app.post("/search")
 async def search(
     req: SearchRequest, authorization: str | None = Header(default=None)
@@ -289,7 +346,8 @@ async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> J
                 return
             async with _global_summary_sem():
                 normal = await summarize_one(
-                    req.query, dbg.get("title"), dbg.get("link") or "", text, mode="summary"
+                    req.query, dbg.get("title"), dbg.get("link") or "", text,
+                    mode="summary", slot_id=_rotated_slot_id(),
                 )
             dbg["comparison_summary"] = normal or None
 
