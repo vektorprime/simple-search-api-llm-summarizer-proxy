@@ -29,6 +29,9 @@ OpenAI-compatible LLM endpoint (llama.cpp, vLLM, or SGLang).
 ```bash
 cp .env.example .env
 # edit .env: at minimum set EXA_API_KEY and LLM_BASE_URL
+# NOTE (containers): LLM_BASE_URL must be reachable FROM the container —
+# 127.0.0.1 inside the container means the container itself, so use the
+# host LAN IP (e.g. http://10.0.0.187:8003/v1), never localhost.
 docker compose up -d --build
 curl http://127.0.0.1:8555/healthz
 # open http://127.0.0.1:8555/admin (admin/admin) to finish setup in the UI
