@@ -148,6 +148,8 @@ RETURN_IMAGE_URLS: bool = _get_bool("RETURN_IMAGE_URLS", False)
 # models and very large pages.
 CHUNKED_SUMMARY: bool = _get_bool("CHUNKED_SUMMARY", False)
 CHUNK_TARGET_CHARS: int = _get_int("CHUNK_TARGET_CHARS", 2600)
+# Chunking only kicks in above this many chars (and only when enabled).
+CHUNK_MIN_CHARS: int = _get_int("CHUNK_MIN_CHARS", 5000)
 
 # --- Exa ---
 EXA_BASE_URL: str = _get("EXA_BASE_URL", "https://api.exa.ai")
@@ -186,6 +188,7 @@ _EDITABLE_INT = (
     "EXA_TIMEOUT_SEC",
     "EXA_TEXT_MAX_CHARS",
     "CHUNK_TARGET_CHARS",
+    "CHUNK_MIN_CHARS",
     "MAX_CONCURRENT_SUMMARIES",
     "SUMMARY_INPUT_MAX_CHARS",
     "REQUEST_TIMEOUT_SEC",

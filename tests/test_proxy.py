@@ -204,6 +204,7 @@ def test_single_flight_defaults():
     assert cfg.LLM_MAX_TOKENS == 0  # unlimited by default
     assert cfg.EXA_TEXT_MAX_CHARS == 0  # unlimited by default
     assert cfg.SUMMARY_INPUT_MAX_CHARS == 0  # unlimited by default
+    assert cfg.CHUNK_MIN_CHARS == 5000  # chunking trigger default
 
 
 @pytest.mark.asyncio
@@ -608,6 +609,54 @@ def test_debug_chunked_total_failure_falls_back():
         assert item["snippet_source"] == "highlights"
     finally:
         for var in ("MODE", "CHUNKED_SUMMARY", "CHUNK_TARGET_CHARS"):
+            os.environ.pop(var, None)
+
+
+def _debug_text_length(env_overrides, text):
+    """Run one debug search; return (snippet_source, llm_call_count, part_count)."""
+    import os
+
+    client = _debug_run(env_overrides)
+    with respx.mock:
+        respx.post("https://api.exa.ai/search").mock(
+            return_value=Response(
+                200, json={"results": [{"url": "https://example.com/a", "title": "A",
+                                        "text": text, "highlights": ["hl1"]}]})
+        )
+        llm = respx.post("http://llm:8005/v1/chat/completions").mock(
+            return_value=Response(200, json={"choices": [{"message": {"content": "S"}}]})
+        )
+        r = client.post("/debug/search", json={"query": "q", "count": 1}, headers=_basic())
+    item = r.json()["results"][0]
+    return item["snippet_source"], llm.call_count, len(item.get("part_summaries") or [])
+
+
+def test_chunk_trigger_needs_enabled_and_over_min():
+    """Chunking fires only when enabled AND the text exceeds CHUNK_MIN_CHARS."""
+    import os
+
+    mid_text = "\n\n".join(
+        f"# S{i}\n\n" + "\n\n".join("word " * 150 for _ in range(4)) for i in range(3)
+    )  # ~9k chars, multi-paragraph sections
+    assert 5000 < len(mid_text) < 30000
+    try:
+        # below min -> single call even when enabled
+        src, calls, parts = _debug_text_length(
+            {"MODE": "summary", "CHUNKED_SUMMARY": "true",
+             "CHUNK_MIN_CHARS": "30000", "CHUNK_TARGET_CHARS": "2000"}, mid_text)
+        assert (src, calls, parts) == ("llm", 1, 0)
+        # above min but disabled -> single call
+        src, calls, parts = _debug_text_length(
+            {"MODE": "summary", "CHUNKED_SUMMARY": "false",
+             "CHUNK_MIN_CHARS": "100", "CHUNK_TARGET_CHARS": "2000"}, mid_text)
+        assert (src, calls, parts) == ("llm", 1, 0)
+        # above min and enabled -> chunked
+        src, calls, parts = _debug_text_length(
+            {"MODE": "summary", "CHUNKED_SUMMARY": "true",
+             "CHUNK_MIN_CHARS": "5000", "CHUNK_TARGET_CHARS": "2000"}, mid_text)
+        assert src == "llm-parts" and parts >= 4 and calls == parts
+    finally:
+        for var in ("MODE", "CHUNKED_SUMMARY", "CHUNK_TARGET_CHARS", "CHUNK_MIN_CHARS"):
             os.environ.pop(var, None)
 
 

@@ -106,7 +106,7 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
     elif text.strip():
         parts = (
             split_text(text, config.CHUNK_TARGET_CHARS)
-            if config.CHUNKED_SUMMARY and len(text) > config.CHUNK_TARGET_CHARS
+            if config.CHUNKED_SUMMARY and len(text) > config.CHUNK_MIN_CHARS
             else None
         )
         if parts is not None:
