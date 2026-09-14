@@ -84,6 +84,8 @@ survives restarts:
 | `LLM_PROVIDER` | `llamacpp` | `llamacpp` \| `vllm` \| `sglang`. Same chat API for all; only gates backend-specific options (slot pinning) |
 | `MODE` | `summary` | `summary` \| `summary-caveman` \| `original` \| `original-caveman`. `summary-caveman` is the same detailed summary in telegraphic style; `original` returns raw text with no LLM call |
 | `RETURN_IMAGE_URLS` | `false` | append page image URLs to the snippet body as text, so the downstream LLM can retrieve them |
+| `CHUNKED_SUMMARY` | `false` | split pages over `CHUNK_TARGET_CHARS` at paragraph/section boundaries, summarize each part with the Mode rules, join outputs verbatim — no final LLM call. For small-context models and very large pages |
+| `CHUNK_TARGET_CHARS` | `2600` | target part size when `CHUNKED_SUMMARY` is on; paragraph-boundary based so parts land at/under this |
 | `CAVEMAN_STYLE` | legacy | `true` behaves like `MODE=original-caveman` when `MODE` is unset |
 | `LLM_BASE_URL` | `http://10.0.0.187:8005/v1` | OpenAI-compatible base URL of your backend |
 | `LLM_MODEL` | `Muse-Glimmer-30B` | must match a backend model id (use Detect in `/admin`) |

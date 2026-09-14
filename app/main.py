@@ -25,6 +25,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from app import config
 from app.exa import exa_search
 from app.models import SearchRequest, SearchResult
+from app.splitter import split_text
 from app.summarizer import summarize_one
 
 logging.basicConfig(level=logging.INFO)
@@ -98,19 +99,52 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
     image_urls = _image_urls(item) if config.RETURN_IMAGE_URLS else []
     snippet, source = "", "empty"
     slot_id: int | None = None
+    part_summaries: list[dict] | None = None
     if use_mode == "original":
         if text.strip():
             snippet, source = text, "original"
     elif text.strip():
-        # Global single-flight: only MAX_CONCURRENT_SUMMARIES summaries run
-        # against the backend at once (default 1); everything else queues here.
-        async with _global_summary_sem():
-            slot_id = _rotated_slot_id()
-            snippet = await summarize_one(
-                query, title, url, text, mode=use_mode, slot_id=slot_id
+        use_text = text
+        parts = (
+            split_text(text, config.CHUNK_TARGET_CHARS)
+            if config.CHUNKED_SUMMARY and len(text) > config.CHUNK_TARGET_CHARS
+            else None
+        )
+        if parts is not None:
+            # Chunked: summarize each part, join deterministically. No final
+            # LLM call. Dropped parts are logged and simply omitted.
+            async def _summarize_part(i: int, heading: str, chunk: str) -> dict:
+                async with _global_summary_sem():
+                    slot = _rotated_slot_id()
+                    out = await summarize_one(
+                        query, title, url, chunk, mode=use_mode, slot_id=slot,
+                        part=(i + 1, len(parts)), section_heading=heading or None,
+                    )
+                return {"heading": heading, "summary": out, "slot_id": slot}
+
+            part_summaries = await asyncio.gather(
+                *(_summarize_part(i, h, c) for i, (h, c) in enumerate(parts))
             )
-        if snippet:
-            source = "llm"
+            good = [(i, s) for i, s in enumerate(part_summaries) if s["summary"]]
+            dropped = len(good) and len(parts) - len(good)
+            if dropped:
+                log.warning("chunked summary: dropped %d/%d parts for %s", dropped, len(parts), url)
+            snippet = "\n\n".join(
+                f"## {p['heading'] or 'Part ' + str(i + 1)}\n\n{p['summary']}".strip()
+                for i, p in enumerate(part_summaries) if p["summary"]
+            ).strip()
+            if snippet:
+                source = "llm-parts"
+        else:
+            # Global single-flight: only MAX_CONCURRENT_SUMMARIES summaries run
+            # against the backend at once (default 1); everything else queues here.
+            async with _global_summary_sem():
+                slot_id = _rotated_slot_id()
+                snippet = await summarize_one(
+                    query, title, url, use_text, mode=use_mode, slot_id=slot_id
+                )
+            if snippet:
+                source = "llm"
     else:
         slot_id = None
     if not snippet:
@@ -125,6 +159,7 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
         "exa_text": text,
         "exa_highlights": highlights,
         "image_urls": image_urls,
+        "part_summaries": part_summaries,
     }
     return SearchResult(link=url, title=title, snippet=snippet), debug
 

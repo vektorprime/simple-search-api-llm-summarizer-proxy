@@ -85,6 +85,8 @@ def build_user_prompt(
     url: str,
     text: str,
     mode: str = "summary",
+    part: tuple[int, int] | None = None,
+    section_heading: str | None = None,
 ) -> str:
     # 0/negative = unlimited: forward everything fetched.
     limit = config.SUMMARY_INPUT_MAX_CHARS
@@ -92,12 +94,21 @@ def build_user_prompt(
     if mode == "original-caveman":
         # Full-rewrite mode: no meta header — the model otherwise echoes
         # the "Search query / Page title / Page URL" labels into the output.
-        return (
-            "Rewrite the following page content in caveman/telegraphic style. "
+        header = (
+            f"Rewrite the following page content in caveman/telegraphic style. "
             "Preserve every fact. Omit nothing. "
-            "Output only the rewritten content, no preamble.\n\n"
-            f"{clipped}"
+            "Output only the rewritten content, no preamble."
         )
+        if part:
+            header = (
+                "Rewrite the following document section in caveman/telegraphic style. "
+                "Preserve every fact. Omit nothing. "
+                f"You are seeing part {part[0]} of {part[1]} of one document. "
+                "Summarize only what is in this section, as if it may be read alone. "
+                "Do not refer to other sections. "
+                "Output only the rewritten section, no preamble."
+            )
+        return f"{header}\n\n{clipped}"
     if mode == "summary-caveman":
         # Identical task to "summary" — only the system prompt differs
         # (telegraphic style). No selection/compression of its own, so no
@@ -111,11 +122,24 @@ def build_user_prompt(
             "Task: Summarize the page content above in detail. "
             "Focus on relevance to the search query where applicable."
         )
+    if part:
+        task = (
+            f"You are seeing section {part[0]} of {part[1]} of one document. "
+            "Summarize ONLY what is in this section, in detail, as if it may be "
+            "read alone. Do not refer to other sections. Keep every fact, name, "
+            "number, and date in the section. Do not invent section headers — "
+            "use only the heading given. Do not repeat or summarize content "
+            "already covered by other sections; summarize only this text. "
+        ) + task
+    heading_line = (
+        f"Section heading: {section_heading or 'n/a'}\n\n" if part else ""
+    )
     return (
         f"Search query: {query}\n"
         f"Page title: {title or 'n/a'}\n"
         f"Page URL: {url}\n\n"
-        f"Page content:\n{clipped}\n\n"
+        + (f"{heading_line}" if part else "")
+        + f"Page content:\n{clipped}\n\n"
         f"{task}"
     )
 
@@ -136,12 +160,16 @@ async def summarize_one(
     text: str,
     mode: str | None = None,
     slot_id: int | None = None,
+    part: tuple[int, int] | None = None,
+    section_heading: str | None = None,
 ) -> str:
     """Return summary, or '' on failure (caller falls back).
 
     mode=None follows the MODE config. slot_id is sent as llama.cpp id_slot
     when provided (the caller rotates it across the slot pool); None omits
     the key so the server auto-assigns an idle slot (-1).
+    part=(i, n) marks section i of n for chunked summarization, with the
+    section's heading for context.
     """
     if not (text or "").strip():
         return ""
@@ -158,7 +186,10 @@ async def summarize_one(
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
-                "content": build_user_prompt(query, title, url, text, mode=use_mode),
+                "content": build_user_prompt(
+                    query, title, url, text, mode=use_mode,
+                    part=part, section_heading=section_heading,
+                ),
             },
         ],
         # NOTE: sampling params (temp/top-p/top-k) always come from the

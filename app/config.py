@@ -143,6 +143,11 @@ def _resolve_mode() -> str:
 MODE: str = _resolve_mode()
 # Append page image URLs to the snippet body as text (downstream LLM can use them).
 RETURN_IMAGE_URLS: bool = _get_bool("RETURN_IMAGE_URLS", False)
+# Break long pages into <=CHUNK_TARGET_CHARS parts, summarize each part, and
+# join the outputs deterministically (no final LLM call). For small-context
+# models and very large pages.
+CHUNKED_SUMMARY: bool = _get_bool("CHUNKED_SUMMARY", False)
+CHUNK_TARGET_CHARS: int = _get_int("CHUNK_TARGET_CHARS", 2600)
 
 # --- Exa ---
 EXA_BASE_URL: str = _get("EXA_BASE_URL", "https://api.exa.ai")
@@ -180,12 +185,13 @@ _EDITABLE_INT = (
     "LLAMACPP_SLOT_COUNT",
     "EXA_TIMEOUT_SEC",
     "EXA_TEXT_MAX_CHARS",
+    "CHUNK_TARGET_CHARS",
     "MAX_CONCURRENT_SUMMARIES",
     "SUMMARY_INPUT_MAX_CHARS",
     "REQUEST_TIMEOUT_SEC",
 )
 _EDITABLE_FLOAT: tuple[str, ...] = ()
-_EDITABLE_BOOL = ("LLAMACPP_USE_SLOTS", "RETURN_IMAGE_URLS")
+_EDITABLE_BOOL = ("LLAMACPP_USE_SLOTS", "RETURN_IMAGE_URLS", "CHUNKED_SUMMARY")
 
 EDITABLE_FIELDS: tuple[str, ...] = _EDITABLE_STR + _EDITABLE_INT + _EDITABLE_FLOAT + _EDITABLE_BOOL
 _SECRET_FIELDS = {"EXA_API_KEY", "PROXY_API_KEY", "LLM_API_KEY"}

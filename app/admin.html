@@ -142,6 +142,8 @@ const GROUPS = [
     LLM_MAX_TOKENS:{label:"Max tokens / summary", hint:"0 = unlimited. If capped, keep ≥1500.", tip:"Per-summary cap sent as max_tokens. 0 (default) omits it, leaving the backend default (llama.cpp: unlimited). Reasoning models spend thinking tokens from this same budget — verified: small caps return EMPTY content with finish_reason=length. Applies to every summary call, including A/B variants.", type:"number"},
     MODE:{label:"Mode", hint:"What OpenWebUI receives for each result.", tip:"summary: detailed LLM summary (1 LLM call per result). summary with caveman: the same detailed summary, written in telegraphic style (1 call). original: raw search text verbatim, zero LLM calls. original with caveman: full telegraphic rewrite, nothing omitted (1 call). Failed LLM calls fall back to highlights, then raw text.", type:"select", options:[["summary","Summary"],["summary-caveman","Summary with caveman"],["original","Original (no changes)"],["original-caveman","Original with caveman"]]},
     RETURN_IMAGE_URLS:{label:"Return image URLs in body as text", hint:"Append page image URLs to the snippet as plain text.", tip:"Collects the result's representative image plus any markdown-embedded image URLs and appends an 'Images on page' list AFTER the snippet body, in every mode — the URLs are never summarized away and the downstream LLM can fetch them. Costs no extra LLM calls.", type:"checkbox"},
+    CHUNKED_SUMMARY:{label:"Break up summarization into multiple parts", hint:"Split long pages at section boundaries; summarize each part; join outputs verbatim.", tip:"For small-context models and very large pages. The text is split on paragraph boundaries (never mid-paragraph, section-heading-aware) into parts under the chars-per-part limit below. Each part is summarized separately with the current Mode rules and the outputs are joined deterministically with '## heading' separators — there is NO final LLM call, so a model that can't hold the whole page still works. Pages already under the limit are processed as a single part (same as off).", type:"checkbox", mini:"Chunked summarization"},
+    CHUNK_TARGET_CHARS:{label:"Chars per part", hint:"Target size of each part (paragraph-safe).", tip:"Only used when the checkbox above is on. Splitting is paragraph-boundary based, so parts land close to but sometimes under this value; a single paragraph is never split. 500 minimum.", type:"number", min:500, mini:"Chunked summarization"},
     LLAMACPP_USE_SLOTS:{label:"Manage slots", hint:"Rotate each job across the available slots.", tip:"When on, every dispatched summary job is assigned the next slot id in 0..N-1 (round-robin), so concurrent jobs land on different slots instead of piling onto one. A job that lands on a busy slot simply waits its turn — the server defers it, no error. Read only when the provider is llama.cpp.", type:"checkbox", mini:"LlamaCPP slot IDs"},
     LLAMACPP_SLOT_COUNT:{label:"Available slots", hint:"How many slot IDs to rotate across (N slots = ids 0..N-1).", tip:"Pool size for rotation: jobs cycle through slot ids 0 to N-1. Must not exceed the server's real slot count (--parallel); out-of-range ids wrap around server-side. Click Detect to read the live count from the backend, or type it manually (whole number, 1 or above).", type:"number", min:1, mini:"LlamaCPP slot IDs"}
   }},
@@ -404,7 +406,7 @@ async function test(){
     const mode = payload.mode || 'summary';
     const secs = ((Date.now()-t0)/1000).toFixed(0);
     say('ok', 'Test search finished: ' + data.length + ' result(s) in ' + secs + 's (mode: ' + mode + ').');
-    const srcName = {llm:'LLM summary', original:'Original (no changes)', highlights:'Search highlights (LLM fallback)', text:'Search text (LLM fallback)', empty:'empty'};
+    const srcName = {llm:'LLM summary', 'llm-parts':'LLM summaries per part, joined', original:'Original (no changes)', highlights:'Search highlights (LLM fallback)', text:'Search text (LLM fallback)', empty:'empty'};
     data.forEach(item => {
       const card = document.createElement('div'); card.className = 'result';
       const title = document.createElement('div');
@@ -436,7 +438,7 @@ async function test(){
       // RIGHT: exactly what OpenWebUI receives in the current mode.
       const right = document.createElement('div'); right.className = 'pane';
       const rh = document.createElement('h3');
-      const showComparison = item.comparison_summary != null;
+      const showComparison = item.comparison_summary != null && !(item.part_summaries && item.part_summaries.length);
       const rightText = item.snippet || '';
       const sentName = {summary:'Summary', original:'Original', 'summary-caveman':'Summary with caveman', 'original-caveman':'Original with caveman'}[mode] || mode;
       rh.textContent = sentName + ' → OpenWebUI ';
@@ -448,9 +450,24 @@ async function test(){
       right.appendChild(rb);
 
       cmp.appendChild(left); cmp.appendChild(right); card.appendChild(cmp);
+      // Chunked mode: show each part's summary, then the joined result.
+      if(item.part_summaries && item.part_summaries.length){
+        const info = document.createElement('div'); info.className = 'hint';
+        info.textContent = item.part_summaries.length + ' part(s) summarized separately, joined deterministically.';
+        card.appendChild(info);
+        item.part_summaries.forEach((p, idx) => {
+          const pp = document.createElement('div'); pp.className = 'pane'; pp.style.marginTop = '.4rem';
+          const ph = document.createElement('h3');
+          ph.textContent = 'Part ' + (idx + 1) + (p.heading ? ' · ' + p.heading : '') + ' ';
+          const pc = document.createElement('span'); pc.className = 'cnt';
+          pc.textContent = '· ' + (p.summary || '').length.toLocaleString() + ' chars';
+          ph.appendChild(pc); pp.appendChild(ph);
+          const pb = document.createElement('div'); pb.className = 'body';
+          pb.textContent = p.summary || '(empty — dropped)';
+          pp.appendChild(pb); card.appendChild(pp);
+        });
+      }
       // BOTTOM (any non-summary mode): the same content summarized with the
-      // Summary mode rules, for direct comparison. Same rules as the Mode
-      // setting — no frozen copies.
       if(showComparison){
         const bottom = document.createElement('div'); bottom.className = 'pane'; bottom.style.marginTop = '.8rem';
         const bh = document.createElement('h3'); bh.textContent = 'Summary (for comparison) ';
