@@ -23,6 +23,9 @@ SYSTEM_PROMPT = (
     "You are a precise web content summarizer. "
     "Summarize the provided page content in detail. "
     "Preserve key facts, names, numbers, and dates. "
+    "Ignore site chrome: navigation menus, buttons (login, search, close, "
+    "subscribe), cookie banners, login prompts, comment prompts, and other "
+    "boilerplate that is not the page's actual content. "
     "Return only the summary, no preamble and no extra commentary."
 )
 
@@ -67,6 +70,9 @@ CAVEMAN_SYSTEM_PROMPT = (
     "Bob does not use armor must retain not.\n"
     "John defeated Bob cannot become John Bob defeated.\n"
     "\n"
+    "Drop site chrome: menus, buttons, login/search/close prompts, cookie "
+    "banners, comment prompts. Content only.\n"
+    "\n"
     "Do not caveman-compress syntax-sensitive or exact-match text. Preserve "
     "verbatim: code, shell/program commands, CLI flags, URLs, file paths, "
     "filenames, identifiers, API names/parameters, configuration values, "
@@ -94,10 +100,13 @@ def build_user_prompt(
     if mode == "original-caveman":
         # Full-rewrite mode: no meta header — the model otherwise echoes
         # the "Search query / Page title / Page URL" labels into the output.
-        header = (
-            f"Rewrite the following page content in caveman/telegraphic style. "
+        return (
+            "Rewrite the following page content in caveman/telegraphic style. "
             "Preserve every fact. Omit nothing. "
-            "Output only the rewritten content, no preamble."
+            "Drop site chrome (buttons, menus, login prompts, banners) — "
+            "it is not content. "
+            "Output only the rewritten content, no preamble.\n\n"
+            f"{clipped}"
         )
         if part:
             header = (
@@ -130,6 +139,7 @@ def build_user_prompt(
             "number, and date in the section. Do not invent section headers — "
             "use only the heading given. Do not repeat or summarize content "
             "already covered by other sections; summarize only this text. "
+            "Ignore site chrome (menus, buttons, login prompts, banners). "
         ) + task
     heading_line = (
         f"Section heading: {section_heading or 'n/a'}\n\n" if part else ""

@@ -409,6 +409,9 @@ async def test_mode_switches_prompt():
         assert short["messages"][0] != plain["messages"][0]
         assert "Do not summarize or omit facts" in short["messages"][0]["content"]
         assert "Preserve verbatim" in short["messages"][0]["content"]
+        # site chrome rule present in normal + caveman system prompts
+        assert "site chrome" in plain["messages"][0]["content"].lower()
+        assert "site chrome" in short["messages"][0]["content"].lower()
     finally:
         import os as _os
 
