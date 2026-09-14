@@ -104,7 +104,6 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
         if text.strip():
             snippet, source = text, "original"
     elif text.strip():
-        use_text = text
         parts = (
             split_text(text, config.CHUNK_TARGET_CHARS)
             if config.CHUNKED_SUMMARY and len(text) > config.CHUNK_TARGET_CHARS
@@ -125,8 +124,8 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
             part_summaries = await asyncio.gather(
                 *(_summarize_part(i, h, c) for i, (h, c) in enumerate(parts))
             )
-            good = [(i, s) for i, s in enumerate(part_summaries) if s["summary"]]
-            dropped = len(good) and len(parts) - len(good)
+            good = [s for s in part_summaries if s["summary"]]
+            dropped = len(parts) - len(good)
             if dropped:
                 log.warning("chunked summary: dropped %d/%d parts for %s", dropped, len(parts), url)
             snippet = "\n\n".join(
@@ -141,7 +140,7 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
             async with _global_summary_sem():
                 slot_id = _rotated_slot_id()
                 snippet = await summarize_one(
-                    query, title, url, use_text, mode=use_mode, slot_id=slot_id
+                    query, title, url, text, mode=use_mode, slot_id=slot_id
                 )
             if snippet:
                 source = "llm"
@@ -373,8 +372,13 @@ async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> J
     else:
         # One extra normal-style summary per result so the UI can compare
         # the current mode's output against the Summary mode rules.
-        # Reuses the global single-flight semaphore.
+        # Skipped when the result was already chunked: the joined parts ARE
+        # the comparison, and a full-text call would defeat chunking's
+        # purpose on small models. Reuses the global single-flight semaphore.
         async def _comparison(dbg: dict) -> None:
+            if dbg.get("part_summaries"):
+                dbg["comparison_summary"] = None
+                return
             text = dbg.get("exa_text") or ""
             if not text.strip():
                 dbg["comparison_summary"] = None

@@ -114,7 +114,7 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;margin-top:1.5rem}
 
   <div class="card">
     <h2>Test search <span class="tag">live A/B</span></h2>
-    <p class="desc">Runs the live pipeline in the current Mode. Left is always the Original raw text; right is exactly what OpenWebUI receives, named by mode. Non-summary modes add the Summary-rules variant below for comparison — all panes derive from the live Mode rules, no frozen copies. Every pane shows its character count.</p>
+    <p class="desc">Runs the live pipeline in the current Mode. Left is always the Original raw text; right is exactly what OpenWebUI receives, named by mode. Chunked mode also renders each part's summary below. Non-summary, non-chunked modes add the Summary-rules variant for comparison — all panes derive from the live Mode rules, no frozen copies. Every pane shows its character count.</p>
     <div class="rowflex">
       <input type="text" id="q" value="What is the Eiffel Tower?"/>
       <input type="number" id="n" value="2" min="1" max="10"/>

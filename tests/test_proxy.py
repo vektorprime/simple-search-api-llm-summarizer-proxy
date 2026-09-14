@@ -533,6 +533,81 @@ def test_debug_search_caveman_adds_comparison_summary():
     _os.environ.pop("MODE", None)  # don't leak into other tests
 
 
+def _debug_run(env_overrides):
+    client, _ = _client(
+        EXA_API_KEY="test-exa",
+        PROXY_API_KEY="",
+        LLM_BASE_URL="http://llm:8005/v1",
+        ADMIN_USER="admin",
+        ADMIN_PASS="admin",
+        **env_overrides,
+    )
+    return client
+
+
+def test_debug_chunked_skips_full_text_comparison():
+    """In chunked mode the joined parts stand alone: no giant comparison call."""
+    import os
+
+    client = _debug_run({"MODE": "original-caveman", "CHUNKED_SUMMARY": "true",
+                         "CHUNK_TARGET_CHARS": "2000"})
+    try:
+        big_text = "\n\n".join(f"# Section {i}\n\n" + ("body text here. " * 200)
+                               for i in range(6))  # ~19k chars -> ~8 parts
+        with respx.mock:
+            respx.post("https://api.exa.ai/search").mock(
+                return_value=Response(
+                    200, json={"results": [{"url": "https://example.com/a", "title": "A",
+                                            "text": big_text, "highlights": ["hl1"]}]})
+            )
+            llm = respx.post("http://llm:8005/v1/chat/completions").mock(
+                return_value=Response(200, json={"choices": [{"message": {"content": "PART"}}]})
+            )
+            r = client.post("/debug/search", json={"query": "q", "count": 1}, headers=_basic())
+        assert r.status_code == 200
+        item = r.json()["results"][0]
+        assert item["comparison_summary"] is None  # skipped, not a full-text call
+        assert len(item["part_summaries"]) >= 5
+        assert item["snippet_source"] == "llm-parts"
+        # every LLM call stayed small: no full-text prompt went out
+        import json as _json
+
+        for call in llm.calls:
+            user_msg = _json.loads(call.request.content)["messages"][1]["content"]
+            assert len(user_msg) < len(big_text), "a full-text call escaped chunking"
+    finally:
+        for var in ("MODE", "CHUNKED_SUMMARY", "CHUNK_TARGET_CHARS"):
+            os.environ.pop(var, None)
+
+
+def test_debug_chunked_total_failure_falls_back():
+    """All parts failing still returns highlights fallback (not a crash/empty)."""
+    import os
+
+    client = _debug_run({"MODE": "summary", "CHUNKED_SUMMARY": "true",
+                         "CHUNK_TARGET_CHARS": "2000"})
+    try:
+        big_text = "\n\n".join(f"# Section {i}\n\n" + ("body text here. " * 200)
+                               for i in range(6))
+        with respx.mock:
+            respx.post("https://api.exa.ai/search").mock(
+                return_value=Response(
+                    200, json={"results": [{"url": "https://example.com/a", "title": "A",
+                                            "text": big_text, "highlights": ["hl1"]}]})
+            )
+            respx.post("http://llm:8005/v1/chat/completions").mock(
+                return_value=Response(500, json={"error": "boom"})
+            )
+            r = client.post("/debug/search", json={"query": "q", "count": 1}, headers=_basic())
+        assert r.status_code == 200
+        item = r.json()["results"][0]
+        assert "hl1" in item["snippet"]
+        assert item["snippet_source"] == "highlights"
+    finally:
+        for var in ("MODE", "CHUNKED_SUMMARY", "CHUNK_TARGET_CHARS"):
+            os.environ.pop(var, None)
+
+
 def test_llm_models_autodetect():
     client, _ = _client(
         LLM_BASE_URL="http://llm:8005/v1",
