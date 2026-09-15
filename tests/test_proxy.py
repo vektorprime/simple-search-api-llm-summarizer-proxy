@@ -13,6 +13,9 @@ def _client(**env_overrides):
     import os
 
     os.environ.update(env_overrides)
+    # Existing tests use tiny fixture texts; default them to pre-threshold
+    # behavior unless the test passes SUMMARY_MIN_CHARS explicitly.
+    os.environ.setdefault("SUMMARY_MIN_CHARS", "0")
     # fresh config import per override set
     import importlib
 
@@ -1086,3 +1089,90 @@ def test_duplicate_urls_summarized_once():
         assert llm.call_count == 2  # dupe never reached the LLM
     finally:
         os.environ.pop("MODE", None)
+
+
+def test_short_page_passes_through_untouched():
+    """Below SUMMARY_MIN_CHARS: verbatim text, zero LLM calls, no image footer."""
+    client = _debug_run({"MODE": "summary", "SUMMARY_MIN_CHARS": "10000",
+                         "RETURN_IMAGE_URLS": "true"})
+    try:
+        with respx.mock:
+            respx.post("https://api.exa.ai/search").mock(
+                return_value=Response(
+                    200, json={"results": [
+                        {"url": "https://example.com/s", "title": "S",
+                         "text": "Short page.",
+                         "highlights": ["SHOULD NOT APPEAR"],
+                         "image": "https://example.com/i.png"},
+                    ]})
+            )
+            llm = respx.post("http://llm:8005/v1/chat/completions").mock(
+                return_value=Response(200, json={"choices": [{"message": {"content": "MUST NOT BE CALLED"}}]})
+            )
+            r = client.post("/debug/search", json={"query": "q", "count": 1}, headers=_basic())
+        assert r.status_code == 200
+        dbg = r.json()["results"][0]
+        assert dbg["snippet"] == "Short page."  # byte-identical, nothing appended
+        assert dbg["snippet_source"] == "passthrough"
+        assert "Images on page" not in dbg["snippet"]
+        assert "SHOULD NOT APPEAR" not in dbg["snippet"]
+        assert llm.call_count == 0
+    finally:
+        import os as _os
+
+        for _k in ("MODE", "SUMMARY_MIN_CHARS", "RETURN_IMAGE_URLS"):
+            _os.environ.pop(_k, None)
+
+
+def test_page_at_threshold_is_summarized():
+    """len(text) == SUMMARY_MIN_CHARS still triggers (>= semantics)."""
+    client = _debug_run({"MODE": "summary", "SUMMARY_MIN_CHARS": "10000"})
+    try:
+        with respx.mock:
+            respx.post("https://api.exa.ai/search").mock(
+                return_value=Response(
+                    200, json={"results": [
+                        {"url": "https://example.com/l", "title": "L",
+                         "text": "x" * 10000, "highlights": []},
+                    ]})
+            )
+            llm = respx.post("http://llm:8005/v1/chat/completions").mock(
+                return_value=Response(200, json={"choices": [{"message": {"content": "S"}}]})
+            )
+            r = client.post("/debug/search", json={"query": "q", "count": 1}, headers=_basic())
+        assert r.status_code == 200
+        dbg = r.json()["results"][0]
+        assert dbg["snippet"] == "S"
+        assert dbg["snippet_source"] == "llm"
+        assert llm.call_count == 1
+    finally:
+        import os as _os
+
+        for _k in ("MODE", "SUMMARY_MIN_CHARS"):
+            _os.environ.pop(_k, None)
+
+
+def test_zero_threshold_summarizes_everything():
+    """SUMMARY_MIN_CHARS=0 preserves the old always-summarize behavior."""
+    client = _debug_run({"MODE": "summary", "SUMMARY_MIN_CHARS": "0"})
+    try:
+        with respx.mock:
+            respx.post("https://api.exa.ai/search").mock(
+                return_value=Response(
+                    200, json={"results": [
+                        {"url": "https://example.com/s", "title": "S",
+                         "text": "Short page.", "highlights": []},
+                    ]})
+            )
+            llm = respx.post("http://llm:8005/v1/chat/completions").mock(
+                return_value=Response(200, json={"choices": [{"message": {"content": "S"}}]})
+            )
+            r = client.post("/debug/search", json={"query": "q", "count": 1}, headers=_basic())
+        assert r.status_code == 200
+        assert r.json()["results"][0]["snippet_source"] == "llm"
+        assert llm.call_count == 1
+    finally:
+        import os as _os
+
+        for _k in ("MODE", "SUMMARY_MIN_CHARS"):
+            _os.environ.pop(_k, None)

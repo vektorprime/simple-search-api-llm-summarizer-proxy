@@ -98,6 +98,7 @@ survives restarts:
 | `MAX_CONCURRENT_SUMMARIES` | `1` | global single-flight: only 1 summary runs at a time, rest queue (raise only if the inference engine handles parallel jobs) |
 | `REQUEST_TIMEOUT_SEC` | `1200` | whole-search timeout incl. queue wait |
 | `SUMMARY_INPUT_MAX_CHARS` | `0` | chars forwarded per summary; `0` = unlimited (forward everything fetched) |
+| `SUMMARY_MIN_CHARS` | `10000` | pages shorter than this skip the local LLM and pass through verbatim; `0` = summarize everything |
 
 On first start with no `config.json`, a legacy `.env` file in the working
 directory is read once as the starting point (for upgrades from earlier

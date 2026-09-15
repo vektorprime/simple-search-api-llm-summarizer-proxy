@@ -164,6 +164,9 @@ PORT: int = _get_int("PORT", 8555)
 MAX_CONCURRENT_SUMMARIES: int = _get_int("MAX_CONCURRENT_SUMMARIES", 1)
 # 0 = unlimited (forward everything fetched).
 SUMMARY_INPUT_MAX_CHARS: int = _get_int("SUMMARY_INPUT_MAX_CHARS", 0)
+# Minimum page length that triggers summarization (summary* modes only).
+# Pages shorter than this skip the local LLM entirely and pass through verbatim.
+SUMMARY_MIN_CHARS: int = _get_int("SUMMARY_MIN_CHARS", 10000)
 REQUEST_TIMEOUT_SEC: int = _get_int("REQUEST_TIMEOUT_SEC", 1200)
 
 # --- Admin UI login (HTTP Basic Auth for /admin and /config) ---
@@ -191,6 +194,7 @@ _EDITABLE_INT = (
     "CHUNK_MIN_CHARS",
     "MAX_CONCURRENT_SUMMARIES",
     "SUMMARY_INPUT_MAX_CHARS",
+    "SUMMARY_MIN_CHARS",
     "REQUEST_TIMEOUT_SEC",
 )
 _EDITABLE_FLOAT: tuple[str, ...] = ()

@@ -120,7 +120,18 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
     snippet, source = "", "empty"
     slot_id: int | None = None
     part_summaries: list[dict] | None = None
-    if use_mode == "original":
+    passthrough = False
+    if (
+        use_mode != "original"
+        and text.strip()
+        and config.SUMMARY_MIN_CHARS > 0
+        and len(text) < config.SUMMARY_MIN_CHARS
+    ):
+        # Below the trigger size: hand the raw page to the downstream LLM
+        # untouched — no LLM call, no rewriting, no image footer.
+        snippet, source = text, "passthrough"
+        passthrough = True
+    elif use_mode == "original":
         if text.strip():
             snippet, source = text, "original"
     elif text.strip():
@@ -168,7 +179,8 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
         slot_id = None
     if not snippet:
         snippet, source = _fallback_snippet(item)
-    snippet = _with_images(snippet, image_urls)
+    if not passthrough:
+        snippet = _with_images(snippet, image_urls)
     debug = {
         "link": url,
         "title": title,
