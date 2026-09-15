@@ -1040,3 +1040,49 @@ async def test_zero_send_limit_forwards_everything():
         import os as _os
 
         _os.environ.pop("SUMMARY_INPUT_MAX_CHARS", None)
+
+
+def test_part_prompt_has_no_echo_prone_labels():
+    """Chunked part prompts carry no 'Section heading:'/'Page content:' labels."""
+    from app.summarizer import build_user_prompt
+
+    msg = build_user_prompt("q", "t", "http://x", "body text here",
+                            mode="summary", part=(2, 5), section_heading="Tasks")
+    assert "Section heading:" not in msg
+    assert "Page content:" not in msg
+    assert "Tasks" in msg  # heading still travels inline in the task
+    assert "section 2 of 5" in msg
+    assert msg.rstrip().endswith("body text here")  # content last, task first
+    msg = build_user_prompt("q", "t", "http://x", "body", mode="original-caveman",
+                            part=(1, 3), section_heading="Intro")
+    assert "Section heading:" not in msg
+    assert "Page content:" not in msg
+
+
+def test_duplicate_urls_summarized_once():
+    """Exact-duplicate URLs within one search cost one summary, not two."""
+    import os
+
+    client = _debug_run({"MODE": "summary"})
+    try:
+        with respx.mock:
+            respx.post("https://api.exa.ai/search").mock(
+                return_value=Response(
+                    200, json={"results": [
+                        {"url": "https://example.com/a", "title": "A",
+                         "text": "Text A.", "highlights": []},
+                        {"url": "https://example.com/a/", "title": "A copy",
+                         "text": "Text A.", "highlights": []},
+                        {"url": "https://example.com/b", "title": "B",
+                         "text": "Text B.", "highlights": []},
+                    ]})
+            )
+            llm = respx.post("http://llm:8005/v1/chat/completions").mock(
+                return_value=Response(200, json={"choices": [{"message": {"content": "S"}}]})
+            )
+            r = client.post("/debug/search", json={"query": "q", "count": 3}, headers=_basic())
+        assert r.status_code == 200
+        assert len(r.json()["results"]) == 2
+        assert llm.call_count == 2  # dupe never reached the LLM
+    finally:
+        os.environ.pop("MODE", None)

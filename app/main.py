@@ -52,6 +52,26 @@ def _check_auth(authorization: str | None) -> None:
     return
 
 
+def _dedupe_items(items: list[dict]) -> list[dict]:
+    """Drop repeat URLs within one search (first occurrence wins).
+
+    Exa occasionally returns the same URL twice in one response; without
+    this we'd summarize (and bill LLM calls for) the identical page twice.
+    Normalizes trailing slashes so '…/page' and '…/page/' match.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for it in items:
+        url = (it.get("url") or it.get("link") or "").rstrip("/")
+        if not url or url in seen:
+            if url:
+                log.info("dropping duplicate search result: %s", url)
+            continue
+        seen.add(url)
+        out.append(it)
+    return out
+
+
 def _fallback_snippet(item: dict) -> tuple[str, str]:
     """Return (snippet, source). Source is 'highlights', 'text' or 'empty'."""
     highlights = item.get("highlights") or []
@@ -319,6 +339,8 @@ async def search(
     if not items:
         return JSONResponse(content=[])
 
+    items = _dedupe_items(items)
+
     try:
         pairs = await asyncio.wait_for(
             asyncio.gather(*(_summarize_item(req.query, it) for it in items[: req.count])),
@@ -357,6 +379,7 @@ async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> J
         return JSONResponse(content={"results": [], "error": str(e)})
     if not items:
         return JSONResponse(content={"results": []})
+    items = _dedupe_items(items)
     try:
         pairs = await asyncio.wait_for(
             asyncio.gather(*(_summarize_item(req.query, it) for it in items[: req.count])),

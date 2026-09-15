@@ -97,6 +97,43 @@ def build_user_prompt(
     # 0/negative = unlimited: forward everything fetched.
     limit = config.SUMMARY_INPUT_MAX_CHARS
     clipped = (text or "") if limit <= 0 else (text or "")[:limit]
+    if part:
+        # Section path: instruction first, content last, with NO mid-message
+        # labels ("Section heading:"/"Page content:") — the model echoed
+        # those into outputs. The heading travels inline in the task instead.
+        # summary + summary-caveman share the task; style comes from the
+        # system prompt, so no information is lost versus the plain summary.
+        head = (section_heading or "").strip() or f"Part {part[0]}"
+        if mode == "original-caveman":
+            task = (
+                f"You are seeing section {part[0]} of {part[1]} of one document "
+                f"(section heading: {head}). "
+                "Rewrite ONLY the text below in caveman/telegraphic style. "
+                "Preserve every fact. Omit nothing. "
+                "Drop site chrome (buttons, menus, login prompts, banners) — "
+                "it is not content. "
+                "Do not refer to other sections. "
+                "Output only the rewritten section: no preamble, no headers, no labels."
+            )
+        else:
+            task = (
+                f"You are seeing section {part[0]} of {part[1]} of one document "
+                f"(section heading: {head}). "
+                "Summarize ONLY the text below, in detail, as if it may be read alone. "
+                "Focus on relevance to the search query where applicable. "
+                "Do not refer to other sections. Keep every fact, name, number, and "
+                "date in the section. Do not invent section headers — use only the "
+                "heading given. Do not repeat or summarize content already covered "
+                "by other sections. Ignore site chrome (menus, buttons, login prompts, banners). "
+                "Output only the summary: no preamble, no headers, no labels."
+            )
+        return (
+            f"Search query: {query}\n"
+            f"Page title: {title or 'n/a'}\n"
+            f"Page URL: {url}\n\n"
+            f"{task}\n\n"
+            f"{clipped}"
+        )
     if mode == "original-caveman":
         # Full-rewrite mode: no meta header — the model otherwise echoes
         # the "Search query / Page title / Page URL" labels into the output.
@@ -108,48 +145,15 @@ def build_user_prompt(
             "Output only the rewritten content, no preamble.\n\n"
             f"{clipped}"
         )
-        if part:
-            header = (
-                "Rewrite the following document section in caveman/telegraphic style. "
-                "Preserve every fact. Omit nothing. "
-                f"You are seeing part {part[0]} of {part[1]} of one document. "
-                "Summarize only what is in this section, as if it may be read alone. "
-                "Do not refer to other sections. "
-                "Output only the rewritten section, no preamble."
-            )
-        return f"{header}\n\n{clipped}"
-    if mode == "summary-caveman":
-        # Identical task to "summary" — only the system prompt differs
-        # (telegraphic style). No selection/compression of its own, so no
-        # information is lost versus the plain summary.
-        task = (
-            "Task: Summarize the page content above in detail. "
-            "Focus on relevance to the search query where applicable."
-        )
-    else:
-        task = (
-            "Task: Summarize the page content above in detail. "
-            "Focus on relevance to the search query where applicable."
-        )
-    if part:
-        task = (
-            f"You are seeing section {part[0]} of {part[1]} of one document. "
-            "Summarize ONLY what is in this section, in detail, as if it may be "
-            "read alone. Do not refer to other sections. Keep every fact, name, "
-            "number, and date in the section. Do not invent section headers — "
-            "use only the heading given. Do not repeat or summarize content "
-            "already covered by other sections; summarize only this text. "
-            "Ignore site chrome (menus, buttons, login prompts, banners). "
-        ) + task
-    heading_line = (
-        f"Section heading: {section_heading or 'n/a'}\n\n" if part else ""
+    task = (
+        "Task: Summarize the page content above in detail. "
+        "Focus on relevance to the search query where applicable."
     )
     return (
         f"Search query: {query}\n"
         f"Page title: {title or 'n/a'}\n"
         f"Page URL: {url}\n\n"
-        + (f"{heading_line}" if part else "")
-        + f"Page content:\n{clipped}\n\n"
+        f"Page content:\n{clipped}\n\n"
         f"{task}"
     )
 
