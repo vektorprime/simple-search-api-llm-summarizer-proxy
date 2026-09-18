@@ -60,13 +60,25 @@ The admin UI shows the exact URL to paste.
 | POST | `/debug/search` | Basic `ADMIN_USER`/`ADMIN_PASS` | same pipeline + raw search fields per result (`exa_text`, `exa_highlights`, `snippet_source`, `comparison_summary`) for the admin side-by-side view |
 | GET | `/llm/models` | Basic `ADMIN_USER`/`ADMIN_PASS` | autodetect model ids from the backend's `/v1/models` (powers the Detect button + suggestions on the LLM model field) |
 | GET | `/llm/slots` | Basic `ADMIN_USER`/`ADMIN_PASS` | list llama.cpp slots from server-native `GET /slots` (powers the Detect button on available slots) |
-| GET | `/healthz` | none | health + config summary |
+| GET | `/healthz` | none | health + config summary (includes cache stats) |
 | GET | `/admin` | Basic `ADMIN_USER`/`ADMIN_PASS` (default `admin`/`admin`) | config web UI |
 | GET/POST | `/config` | same Basic | read/update config JSON |
+| GET | `/cache/stats` | same Basic | cache size, TTLs, hit/miss counters |
+| POST | `/cache/clear` | same Basic | drop all cached entries |
 
 `/search` request: `{"query": "...", "count": 5}` →
 response: `[{"link","title","snippet"}]`. Failures return `[]` (OpenWebUI-safe).
 Per-result fallback: `LLM summary → search highlights → search text`.
+Optional cache (`CACHE_ENABLED=true`): key is `normalized query + count + (MODE, RETURN_IMAGE_URLS)`,
+where normalization lowercases and ignores surrounding quotes, extra whitespace, and `. , ; : !`
+punctuation.
+Fresh hits return `X-Cache: HIT` with no Exa/LLM calls; stale hits revalidate Exa text and return
+`X-Cache: REVALIDATED` or regenerate (`X-Cache: MISS`).
+Stage 2 (link, `CACHE_LINK_ENABLED=true` by default): after the search API answers, each result URL
+(normalized host, no trailing slash/fragment) reuses its stored summary when the stored page text
+matches the fresh result exactly — even for a completely different query — saving one LLM call per
+hit (`X-Link-Cache: hits/links`). Changed pages regenerate just that link.
+Only full successes (no fallback snippets) are cached at either stage. `/debug/search` always bypasses the cache.
 
 ## Configuration
 
@@ -99,6 +111,13 @@ survives restarts:
 | `REQUEST_TIMEOUT_SEC` | `1200` | whole-search timeout incl. queue wait |
 | `SUMMARY_INPUT_MAX_CHARS` | `0` | chars forwarded per summary; `0` = unlimited (forward everything fetched) |
 | `SUMMARY_MIN_CHARS` | `10000` | pages shorter than this skip the local LLM and pass through verbatim; `0` = summarize everything |
+| `CACHE_ENABLED` | `false` | stage-1 query cache: repeat query + count with same `MODE` + `RETURN_IMAGE_URLS` returns cached summary |
+| `CACHE_LINK_ENABLED` | `true` | stage-2 link cache (needs `CACHE_ENABLED`): per-URL summaries reused across queries when page text matches; shares TTL, size cap and file with stage 1 |
+| `CACHE_FRESH_SEC` | `86400` | fresh window (24h): hits return directly with zero Exa/LLM calls |
+| `CACHE_TTL_SEC` | `172800` | outer TTL (48h): past the fresh window the proxy re-runs Exa and reuses the cache only if fresh results match the stored text; older entries expire |
+| `CACHE_MAX_ENTRIES` | `200` | LRU cap on cached entries (queries + link snippets share the pool; memory + database) |
+| `CACHE_DB_FILE` | `./cache.db` (`/data/cache.db` in compose) | SQLite backing store (WAL mode, row-level writes); survives restarts via the named volume; inspect with `sqlite3 /data/cache.db "SELECT key,kind,datetime(created_at,'unixepoch') FROM entries;"` |
+| `CACHE_FILE` | `./cache.json` (legacy) | previous JSON store: imported once into `CACHE_DB_FILE` on first start when the database is empty, then ignored; safe to delete |
 
 On first start with no `config.json`, a legacy `.env` file in the working
 directory is read once as the starting point (for upgrades from earlier

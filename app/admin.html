@@ -107,9 +107,19 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;margin-top:1.5rem}
   <datalist id="llm_models_list"></datalist>
 
   <div class="actions">
-    <button class="primary" id="btnSave" onclick="save()">Save</button>
-    <button class="ghost" id="btnReload" onclick="load(true)">Reload</button>
+    <button class="primary" id="btnSave" onclick="save()" title="Save and apply: apply your edits immediately and persist them to the config file (survives restarts). Use after changing any setting. Read-only and disabled fields are skipped; empty secret fields keep their current values.">Save and apply</button>
+    <button class="ghost" id="btnReload" onclick="load(true)" title="Reset without saving: discard unsaved edits and re-fetch the live server config into the form. Use to abandon your changes, to pick up edits made in another tab or directly in config.json, or to verify what is actually active.">Reset without saving</button>
     <div id="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Result cache <span class="tag">optional</span></h2>
+    <p class="desc">Two-stage exact-match cache. Stage 1 (query): repeat queries return with zero search/LLM calls while fresh, revalidate against fresh search results while stale. Stage 2 (link): per-URL summaries are reused across different queries whenever the page text matches. Test search always bypasses the cache.</p>
+    <div class="rowflex">
+      <button class="ghost small" onclick="cacheStats()">Refresh stats</button>
+      <button class="ghost small" onclick="cacheClear()">Clear cache</button>
+      <code class="pill" id="cache_stats">…</code>
+    </div>
   </div>
 
   <div class="card">
@@ -130,9 +140,9 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;margin-top:1.5rem}
 "use strict";
 // Grouped settings schema: key -> {label, hint (short, shown), tip (detailed, tooltip), ...}
 const GROUPS = [
-  {title:"Search API", tag:"search provider", desc:"Where results and page text come from (current provider: Exa).", fields:{
-    EXA_API_KEY:{label:"Search API key", hint:"Required — without it every search returns empty.", tip:"API key for the configured search provider (Exa dashboard by default). Sent as x-api-key on every search call. Missing or invalid key fails closed: searches return []. Stored masked; leave empty to keep.", secret:true},
-    EXA_BASE_URL:{label:"Search base URL", hint:"Base URL of the search provider.", tip:"Only change for a mirror or an Exa-compatible endpoint. Must accept POST /search with x-api-key auth. Applies immediately, no restart needed."}
+  {title:"Search API", tag:"search provider", desc:"Where results and page text come from.", fields:{
+    EXA_API_KEY:{label:"Search API key", hint:"Required — without it every search returns empty.", tip:"API key for the configured search provider (provider dashboard by default). Sent as x-api-key on every search call. Missing or invalid key fails closed: searches return []. Stored masked; leave empty to keep.", secret:true},
+    EXA_BASE_URL:{label:"Search base URL", hint:"Base URL of the search provider.", tip:"Only change for a mirror or a compatible search endpoint. Must accept POST /search with x-api-key auth. Applies immediately, no restart needed."}
   }},
   {title:"Summarizer (local LLM)", tag:"LLM backend", desc:"Backend that writes the summaries (llama.cpp, vLLM or SGLang). Behavior is driven by Mode.", fields:{
     LLM_PROVIDER:{label:"LLM API provider", hint:"Which backend serves the summaries.", tip:"llama.cpp, vLLM and SGLang all speak the same /v1/chat/completions API, so prompts, parsing and fallbacks are identical. Today this choice only gates backend-specific options (see 'Manage slots' in the LlamaCPP slot IDs section).", type:"select", options:[["llamacpp","llama.cpp"],["vllm","vLLM"],["sglang","SGLang"]]},
@@ -159,6 +169,14 @@ const GROUPS = [
     EXA_TEXT_MAX_CHARS:{label:"Ask Search API For This Many Text Chars", hint:"0 = unlimited (fetch all the API returns).", tip:"Characters of page text requested per result. 0 (default) omits the cap so the search API returns its default text. Only what 'Send LLM This Many Text Chars' allows is actually forwarded per summary — raising this past that changes nothing.", type:"number"},
     SUMMARY_INPUT_MAX_CHARS:{label:"Send LLM This Many Text Chars", hint:"0 = unlimited (forward everything fetched).", tip:"Fetched text is truncated to this before reaching the LLM, so this is the main lever on prompt size, speed and cost. 0 (default) forwards everything fetched. Raising it only helps if 'Ask Search API For This Many Text Chars' is at least as large.", type:"number"}
   }},
+  {title:"Result cache", tag:"optional", desc:"Exact-match (case-insensitive) cache: repeat queries skip search + LLM while fresh, revalidate against fresh search results while stale.", fields:{
+    CACHE_ENABLED:{label:"Enable result cache", hint:"Reuse cached summaries for repeat queries.", tip:"When on, a repeat query (same text ignoring case, quotes, extra spaces and . , ; : ! punctuation, same count, same Mode + image-URL setting) returns the cached summary with zero search/LLM calls while fresh (first 24h by default). Older entries up to the outer TTL re-run the search API and reuse the cache only when the fresh results match byte-for-byte; otherwise they regenerate. Off by default.", type:"checkbox"},
+    CACHE_LINK_ENABLED:{label:"Enable link cache (stage 2)", hint:"Reuse per-URL summaries across different queries.", tip:"Second stage of the cache: after the search API returns links, each link's stored summary is reused whenever the stored page text matches the fresh result exactly — even when the query is completely different — saving one LLM call per hit. Only links with changed pages regenerate. Shares the same TTL, file and size cap as the query cache above, and needs the master Enable switch on. On by default.", type:"checkbox"},
+    CACHE_TTL_SEC:{label:"Outer TTL (seconds)", hint:"Entries older than this expire (default 172800 = 48h).", tip:"Hard expiry for cache entries in seconds. Past this age the entry is dropped and the next identical query runs the full search + LLM pipeline. Must stay at or above the fresh window below; 172800 seconds equals 48 hours and matches the default revalidation policy.", type:"number", min:60},
+    CACHE_FRESH_SEC:{label:"Fresh window (seconds)", hint:"Serve directly without re-checking (default 86400 = 24h).", tip:"Freshness window in seconds during which a cache hit returns immediately with no search or LLM calls. After this window but before the outer TTL, the proxy re-runs the search API and compares the fresh page text against the stored copy — reuse only on an exact match, regenerate otherwise. 86400 seconds equals 24 hours.", type:"number", min:60},
+    CACHE_MAX_ENTRIES:{label:"Max cached entries", hint:"Oldest entries evicted past this (default 200).", tip:"Maximum number of entries kept in memory and in the database, enforced as LRU across query and link entries sharing one pool: the least-recently-used entry is evicted first when the limit is exceeded. Each entry holds a full search response or summary plus the raw page text needed for revalidation, so keep this modest on small disks.", type:"number", min:1},
+    CACHE_DB_FILE:{label:"Cache database", hint:"SQLite file shared by both stages (survives restarts).", tip:"Filesystem path of the SQLite database backing both cache stages. Entries are written row-by-row, so a search never rewrites the whole file no matter how large the cache grows. Defaults next to the config file (in Docker: /data/cache.db on the named volume, so restarts keep entries). Change only to relocate it.", secret:false},
+  }},
   {title:"Access", tag:"auth", desc:"Who may use the proxy and this page.", fields:{
     PROXY_API_KEY:{label:"Proxy API key", hint:"Shown here only — never enforced.", tip:"Any key (or none) is accepted on /search by design. This value is stored and displayed masked, but changing it affects nothing functionally — it exists so OpenWebUI's required key field has something to hold.", secret:true},
     PORT:{label:"Port", hint:"Read-only — set via environment, needs restart.", tip:"The serving port comes from the PORT env var / compose port mapping at startup and cannot be changed from this page. Edit the compose file and recreate the container to change it.", readonly:true}
@@ -176,7 +194,7 @@ function say(kind, text){
 function setBusy(busy){
   document.getElementById('btnSave').disabled = busy;
   document.getElementById('btnReload').disabled = busy;
-  document.getElementById('btnSave').textContent = busy ? 'Saving…' : 'Save';
+  document.getElementById('btnSave').textContent = busy ? 'Saving…' : 'Save and apply';
 }
 
 function searchUrl(){ return window.location.origin + '/search'; }
@@ -312,13 +330,13 @@ function refreshLlamaCpp(){
 }
 
 async function load(manual){
-  if(manual){ setBusy(true); say('info', 'Reloading configuration…'); }
+  if(manual){ setBusy(true); say('info', 'Resetting without saving…'); }
   try{
     document.getElementById('owui_url').textContent = searchUrl();
     const r = await fetch('/config');
     if(!r.ok) throw new Error('HTTP ' + r.status);
     buildForm(await r.json());
-    if(manual) say('ok', 'Configuration reloaded from server.');
+    if(manual) say('ok', 'Form reset to live server values — unsaved edits discarded.');
   }catch(e){ say('err', 'Reload failed: ' + e.message); }
   finally{ if(manual) setBusy(false); }
 }
@@ -487,8 +505,33 @@ async function test(){
   finally{ btn.disabled = false; btn.textContent = 'Run'; }
 }
 
+async function cacheStats(){
+  try{
+    const r = await fetch('/cache/stats');
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+    document.getElementById('cache_stats').textContent =
+      (data.enabled ? 'enabled' : 'disabled') + (data.link_enabled ? ' +links' : '') +
+      ' · ' + data.size + '/' + data.max_entries +
+      ' entries (queries ' + data.query_entries + ', links ' + data.link_entries + ')' +
+      ' · fresh ' + data.fresh_sec + 's / ttl ' + data.ttl_sec + 's' +
+      ' · query hits ' + data.hits_fresh + '+' + data.hits_revalidated +
+      ' / link hits ' + data.link_hits + ' / misses ' + data.misses + '+' + data.link_misses;
+  }catch(e){ document.getElementById('cache_stats').textContent = 'stats failed: ' + e.message; }
+}
+
+async function cacheClear(){
+  try{
+    const r = await fetch('/cache/clear', {method:'POST'});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+    say('ok', 'Cache cleared (' + data.cleared + ' entries removed).');
+    cacheStats();
+  }catch(e){ say('err', 'Cache clear failed: ' + e.message); }
+}
+
 health();
-load(false).then(() => detectModels(true));
+load(false).then(() => { detectModels(true); cacheStats(); });
 </script>
 </body>
 </html>

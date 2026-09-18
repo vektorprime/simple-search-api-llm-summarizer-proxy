@@ -15,6 +15,10 @@ services:
       # Durable config: every change in /admin is written here and survives
       # container restarts/upgrades via the named volume below.
       CONFIG_FILE: "/data/config.json"
+      # Durable result cache (optional, off by default): same volume, so
+      # cached summaries survive restarts/upgrades. Change via /admin.
+      CACHE_FILE: "/data/cache.json"
+      CACHE_DB_FILE: "/data/cache.db"
     volumes:
       - ssalmp-config:/data
     restart: unless-stopped

@@ -22,6 +22,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
+from app import cache as cache_mod
 from app import config
 from app.exa import exa_search
 from app.models import SearchRequest, SearchResult
@@ -237,6 +238,7 @@ async def healthz() -> dict:
         "llm_model": config.LLM_MODEL,
         "llm_base_url": config.LLM_BASE_URL,
         "exa_configured": bool(config.EXA_API_KEY),
+        "cache": cache_mod.stats(),
     }
 
 
@@ -332,6 +334,26 @@ async def llm_slots(_: None = Depends(_check_admin)) -> JSONResponse:
         raise HTTPException(status_code=502, detail=f"Could not list slots: {e}")
 
 
+@app.get("/cache/stats")
+async def cache_stats(_: None = Depends(_check_admin)) -> JSONResponse:
+    """Admin-only: cache size, TTLs, hit/miss counters, backing file."""
+    return JSONResponse(content=cache_mod.stats())
+
+
+@app.post("/cache/clear")
+async def cache_clear(_: None = Depends(_check_admin)) -> JSONResponse:
+    """Admin-only: drop all cached entries (memory + disk)."""
+    removed = cache_mod.clear()
+    log.info("cache cleared: %d entries removed", removed)
+    return JSONResponse(content={"cleared": removed, "cache": cache_mod.stats()})
+
+
+# Sources that are safe to cache: real summaries / verbatim modes. Fallback
+# sources (highlights/text/empty) mean the LLM failed — caching those would
+# freeze a degraded result even after the backend recovers.
+_CACHEABLE_SOURCES = {"llm", "llm-parts", "original", "passthrough"}
+
+
 @app.post("/search")
 async def search(
     req: SearchRequest, authorization: str | None = Header(default=None)
@@ -339,6 +361,14 @@ async def search(
     _check_auth(authorization)
     if not req.query.strip():
         return JSONResponse(content=[])
+    norm_query = cache_mod.normalize_query(req.query)
+    fp = cache_mod.fingerprint() if config.CACHE_ENABLED else {}
+    cache_key = cache_mod.cache_key(norm_query, req.count, fp) if config.CACHE_ENABLED else ""
+    if config.CACHE_ENABLED:
+        fresh = cache_mod.get_fresh(cache_key)
+        if fresh is not None:
+            log.info("cache fresh hit: %r count=%d", norm_query, req.count)
+            return JSONResponse(content=fresh, headers={"X-Cache": "HIT"})
     try:
         items = await asyncio.wait_for(
             exa_search(req.query, req.count),
@@ -352,18 +382,90 @@ async def search(
         return JSONResponse(content=[])
 
     items = _dedupe_items(items)
+    sliced = items[: req.count]
+    if config.CACHE_ENABLED:
+        # Stale-window revalidation: same Exa results -> reuse cached summary
+        # without any LLM call (still costs one Exa call to verify).
+        stale = cache_mod.get_stale(cache_key)
+        if stale is not None:
+            fresh_canonical = cache_mod.canonical_exa(sliced)
+            if cache_mod.exa_equal(stale.get("exa_items"), fresh_canonical):
+                cache_mod.refresh(cache_key)
+                log.info("cache revalidated hit: %r count=%d", norm_query, req.count)
+                return JSONResponse(
+                    content=stale.get("payload", []), headers={"X-Cache": "REVALIDATED"}
+                )
+            log.info("cache stale mismatch, regenerating: %r", norm_query)
+
+    # Stage 2 (link cache): on a query miss, reuse per-URL summaries whose
+    # stored page text matches the fresh Exa text — even across different
+    # queries. Only links needing (re)generation reach the LLM.
+    # prefilled[i] holds (SearchResult, {"snippet_source": ...}) in sliced
+    # order; pending lists (idx, item, link_key, url_norm, canon_one).
+    prefilled: list[tuple[SearchResult, dict] | None] = [None] * len(sliced)
+    pending: list[tuple[int, dict, str, str, dict]] = []
+    link_stage = config.CACHE_ENABLED and config.CACHE_LINK_ENABLED
+    link_hits = 0
+    if link_stage:
+        for i, it in enumerate(sliced):
+            url = it.get("url") or it.get("link") or ""
+            url_norm = cache_mod.normalize_url(url)
+            if not url_norm:
+                pending.append((i, it, "", "", {}))
+                continue
+            lkey = cache_mod.link_key(url_norm, fp)
+            canon_one = cache_mod.canonical_exa([it])[0]
+            snippet, source = cache_mod.get_link_hit(lkey, canon_one)
+            if snippet is not None:
+                link_hits += 1
+                prefilled[i] = (
+                    SearchResult(link=url, title=it.get("title"), snippet=snippet),
+                    {"snippet_source": source or "llm", "link_key": lkey},
+                )
+            else:
+                pending.append((i, it, lkey, url_norm, canon_one))
+    else:
+        pending = [(i, it, "", "", {}) for i, it in enumerate(sliced)]
+    if link_stage:
+        log.info("link cache: %d/%d hits for %r", link_hits, len(sliced), norm_query)
 
     try:
-        pairs = await asyncio.wait_for(
-            asyncio.gather(*(_summarize_item(req.query, it) for it in items[: req.count])),
-            timeout=config.REQUEST_TIMEOUT_SEC,
+        done = (
+            await asyncio.wait_for(
+                asyncio.gather(*(_summarize_item(req.query, it) for _, it, _, _, _ in pending)),
+                timeout=config.REQUEST_TIMEOUT_SEC,
+            )
+            if pending
+            else []
         )
     except Exception as e:
         log.warning("summarization pipeline failed: %s", e)
         return JSONResponse(content=[])
 
+    for (i, it, lkey, url_norm, canon_one), (res, dbg) in zip(pending, done):
+        prefilled[i] = (res, dbg)
+        if link_stage and lkey and res.link and (res.snippet or ""):
+            src = dbg.get("snippet_source")
+            if src in _CACHEABLE_SOURCES:
+                cache_mod.put_link(lkey, url_norm, fp, res.snippet or "", src, canon_one)
+    pairs = [p for p in prefilled if p is not None]
+
     # drop items with no URL; OpenWebUI tolerates fewer than `count`
     payload = [r.model_dump() for r, _ in pairs if r.link]
+    if config.CACHE_ENABLED and payload:
+        sources = {dbg.get("snippet_source") for _, dbg in pairs}
+        if sources and sources <= _CACHEABLE_SOURCES:
+            cache_mod.put(
+                cache_key, norm_query, req.count, fp, payload,
+                cache_mod.canonical_exa(sliced),
+            )
+            log.info("cache store: %r count=%d sources=%s", norm_query, req.count, sources)
+        else:
+            log.info("cache skip (fallback sources): %r sources=%s", norm_query, sources)
+        headers = {"X-Cache": "MISS"}
+        if link_stage:
+            headers["X-Link-Cache"] = f"{link_hits}/{len(sliced)}"
+        return JSONResponse(content=payload, headers=headers)
     return JSONResponse(content=payload)
 
 
@@ -378,6 +480,8 @@ async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> J
     rules as the Summary mode (null when already in summary/original modes
     with nothing to compare). There are no frozen prompt copies anywhere:
     every pane is produced from the live MODE rules.
+
+    Always bypasses the result cache (live pipeline for testing).
     """
     if not req.query.strip():
         return JSONResponse(content={"results": []})

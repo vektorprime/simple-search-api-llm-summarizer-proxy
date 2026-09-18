@@ -173,6 +173,38 @@ REQUEST_TIMEOUT_SEC: int = _get_int("REQUEST_TIMEOUT_SEC", 1200)
 ADMIN_USER: str = _get("ADMIN_USER", "admin")
 ADMIN_PASS: str = _get("ADMIN_PASS", "admin")
 
+# --- Optional exact-match result cache ---
+# Key = lowercased query + count + fingerprint(MODE, RETURN_IMAGE_URLS).
+# Tiered TTL: age <= CACHE_FRESH_SEC -> serve directly; FRESH < age <=
+# CACHE_TTL_SEC -> revalidate by comparing stored Exa items vs fresh Exa
+# results; older -> expired. File defaults next to CONFIG_FILE so docker
+# (/data/config.json -> /data/cache.json) survives restarts via the volume.
+def _default_cache_file() -> str:
+    try:
+        base = os.path.dirname(os.path.abspath(CONFIG_FILE))
+    except Exception:
+        base = os.getcwd()
+    return os.path.join(base, "cache.json")
+
+
+def _default_cache_db_file() -> str:
+    try:
+        base = os.path.dirname(os.path.abspath(CONFIG_FILE))
+    except Exception:
+        base = os.getcwd()
+    return os.path.join(base, "cache.db")
+
+
+CACHE_ENABLED: bool = _get_bool("CACHE_ENABLED", False)
+CACHE_LINK_ENABLED: bool = _get_bool("CACHE_LINK_ENABLED", True)
+CACHE_TTL_SEC: int = _get_int("CACHE_TTL_SEC", 172800)  # 48h outer limit
+CACHE_FRESH_SEC: int = _get_int("CACHE_FRESH_SEC", 86400)  # 24h direct-serve window
+CACHE_MAX_ENTRIES: int = _get_int("CACHE_MAX_ENTRIES", 200)
+# Legacy JSON backing store: imported once into CACHE_DB_FILE on first start
+# if the DB is empty, then ignored. Safe to delete afterwards.
+CACHE_FILE: str = _get("CACHE_FILE", _default_cache_file())
+CACHE_DB_FILE: str = _get("CACHE_DB_FILE", _default_cache_db_file())
+
 # --- Runtime admin UI support (in-memory overrides + CONFIG_FILE persist) ---
 _EDITABLE_STR = (
     "EXA_API_KEY",
@@ -183,6 +215,8 @@ _EDITABLE_STR = (
     "LLM_API_KEY",
     "EXA_BASE_URL",
     "MODE",
+    "CACHE_FILE",
+    "CACHE_DB_FILE",
 )
 _EDITABLE_INT = (
     "LLM_TIMEOUT_SEC",
@@ -196,9 +230,13 @@ _EDITABLE_INT = (
     "SUMMARY_INPUT_MAX_CHARS",
     "SUMMARY_MIN_CHARS",
     "REQUEST_TIMEOUT_SEC",
+    "CACHE_TTL_SEC",
+    "CACHE_FRESH_SEC",
+    "CACHE_MAX_ENTRIES",
 )
 _EDITABLE_FLOAT: tuple[str, ...] = ()
-_EDITABLE_BOOL = ("LLAMACPP_USE_SLOTS", "RETURN_IMAGE_URLS", "CHUNKED_SUMMARY")
+_EDITABLE_BOOL = ("LLAMACPP_USE_SLOTS", "RETURN_IMAGE_URLS", "CHUNKED_SUMMARY", "CACHE_ENABLED",
+                    "CACHE_LINK_ENABLED")
 
 EDITABLE_FIELDS: tuple[str, ...] = _EDITABLE_STR + _EDITABLE_INT + _EDITABLE_FLOAT + _EDITABLE_BOOL
 _SECRET_FIELDS = {"EXA_API_KEY", "PROXY_API_KEY", "LLM_API_KEY"}
