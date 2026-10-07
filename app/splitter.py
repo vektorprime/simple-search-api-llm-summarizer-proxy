@@ -94,13 +94,17 @@ def split_text(text: str, target_chars: int) -> list[tuple[str, str]]:
             break
 
     # pre-label each paragraph with the heading it belongs to; heading
-    # lines themselves travel in the chunk header, not the body
+    # lines themselves travel in the chunk header, not the body. Body text
+    # on the lines right after a heading (`## H\nbody`) stays in the chunk.
     labeled: list[tuple[str, str]] = []
     cur_head = head0
     for p in paragraphs:
         label = _heading_label(p)
         if label:
             cur_head = label
+            body = p.strip().split("\n", 1)[1] if "\n" in p.strip() else ""
+            if body.strip():
+                labeled.append((cur_head, body))
             continue
         labeled.append((cur_head, p))
 

@@ -50,6 +50,8 @@ button.primary:disabled{opacity:.6;cursor:wait}
 button.ghost{background:#fff;border-color:var(--line);color:var(--ink)}
 button.ghost:hover{background:#f1f5f9}
 button.small{padding:.35rem .8rem;font-size:.85rem}
+#credwarn{background:var(--err-bg);color:var(--err-ink);border:1px solid var(--err-line);border-radius:8px;padding:.6rem .9rem;margin-bottom:1rem;font-size:.9rem}
+.field .envlock{font-size:.78rem;color:var(--err-ink);margin-top:.25rem}
 #msg{flex:1;font-size:.88rem;border-radius:8px;padding:.5rem .8rem;display:none}
 #msg.show{display:block}
 #msg.ok{background:var(--ok-bg);color:var(--ok-ink);border:1px solid var(--ok-line)}
@@ -89,6 +91,8 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;margin-top:1.5rem}
     <h1>SSALMP Admin</h1>
     <span id="health">connecting…</span>
   </header>
+
+  <div id="credwarn" hidden>Admin login is still the default <b>admin / admin</b>. Anyone who can reach this port can change settings. Set <code>ADMIN_USER</code> and <code>ADMIN_PASS</code> in <code>.env</code> and recreate the container.</div>
 
   <div class="card">
     <h2>Connect to OpenWebUI</h2>
@@ -142,18 +146,18 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;margin-top:1.5rem}
 const GROUPS = [
   {title:"Search API", tag:"search provider", desc:"Where results and page text come from.", fields:{
     EXA_API_KEY:{label:"Search API key", hint:"Required — without it every search returns empty.", tip:"API key for the configured search provider (provider dashboard by default). Sent as x-api-key on every search call. Missing or invalid key fails closed: searches return []. Stored masked; leave empty to keep.", secret:true},
-    EXA_BASE_URL:{label:"Search base URL", hint:"Base URL of the search provider.", tip:"Only change for a mirror or a compatible search endpoint. Must accept POST /search with x-api-key auth. Applies immediately, no restart needed."}
+    EXA_BASE_URL:{label:"Search base URL", hint:"Base URL of the search provider.", tip:"Only change for a mirror or a compatible search endpoint. Must accept POST /search with x-api-key auth. Applies immediately, no restart needed. Changing it requires re-entering the Search API key in the same save, so the stored key is never sent to a new host unknowingly."}
   }},
   {title:"Summarizer (local LLM)", tag:"LLM backend", desc:"Backend that writes the summaries (llama.cpp, vLLM or SGLang). Behavior is driven by Mode.", fields:{
     LLM_PROVIDER:{label:"LLM API provider", hint:"Which backend serves the summaries.", tip:"llama.cpp, vLLM and SGLang all speak the same /v1/chat/completions API, so prompts, parsing and fallbacks are identical. Today this choice only gates backend-specific options (see 'Manage slots' in the LlamaCPP slot IDs section).", type:"select", options:[["llamacpp","llama.cpp"],["vllm","vLLM"],["sglang","SGLang"]]},
-    LLM_BASE_URL:{label:"LLM base URL", hint:"e.g. http://10.0.0.187:8005/v1", tip:"Must be reachable FROM the proxy, not from your browser. In Docker use the host LAN IP or host.docker.internal — 127.0.0.1 inside the container means the container itself. Do not append /chat/completions."},
+    LLM_BASE_URL:{label:"LLM base URL", hint:"e.g. http://10.0.0.187:8005/v1", tip:"Must be reachable FROM the proxy, not from your browser. In Docker use the host LAN IP or host.docker.internal — 127.0.0.1 inside the container means the container itself. Do not append /chat/completions. Changing it requires re-entering the LLM API key in the same save (any value for llama.cpp), so the stored key is never sent to a new host unknowingly."},
     LLM_MODEL:{label:"LLM model", hint:"Backend model id — Detect lists what is served.", tip:"Must exactly match an id from the backend's GET /v1/models (case-sensitive). Click Detect to fetch the live list into suggestions, or type it manually. A wrong id makes the backend 404 and every result falls back to highlights/raw text.", secret:false},
     LLM_API_KEY:{label:"LLM API key", hint:"Sent as Bearer if the backend needs one.", tip:"llama.cpp needs none (any value works); a vLLM/SGLang instance behind a gateway may require a real key. Stored masked; leave empty in the form to keep the current value.", secret:true},
     LLM_MAX_TOKENS:{label:"Max tokens / summary", hint:"0 = unlimited. If capped, keep ≥1500.", tip:"Per-summary cap sent as max_tokens. 0 (default) omits it, leaving the backend default (llama.cpp: unlimited). Reasoning models spend thinking tokens from this same budget — verified: small caps return EMPTY content with finish_reason=length. Applies to every summary call, including A/B variants.", type:"number"},
-    MODE:{label:"Mode", hint:"What OpenWebUI receives for each result.", tip:"summary: detailed LLM summary (1 LLM call per result). summary with caveman: the same detailed summary, written in telegraphic style (1 call). original: raw search text verbatim, zero LLM calls. original with caveman: full telegraphic rewrite, nothing omitted (1 call). Failed LLM calls fall back to highlights, then raw text.", type:"select", options:[["summary","Summary"],["summary-caveman","Summary with caveman"],["original","Original (no changes)"],["original-caveman","Original with caveman"]]},
-    SUMMARY_MIN_CHARS:{label:"Chars to trigger summary", hint:"Pages this long (or longer) get summarized; shorter ones pass through untouched.", tip:"Gate for summary modes: a page only goes to the local LLM when its text reaches this many characters. Shorter pages are returned to OpenWebUI verbatim — zero LLM calls, no rewriting, not even the image footer — which saves the most time on small quick-answer pages. 10000 is a sane start; 0 summarizes everything (previous behavior). Original (no changes) mode never calls the LLM regardless.", type:"number", min:0, step:500},
-    RETURN_IMAGE_URLS:{label:"Return image URLs in body as text", hint:"Append page image URLs to the snippet as plain text.", tip:"Collects the result's representative image plus any markdown-embedded image URLs and appends an 'Images on page' list AFTER the snippet body, in every mode — the URLs are never summarized away and the downstream LLM can fetch them. Costs no extra LLM calls.", type:"checkbox"},
-    CHUNKED_SUMMARY:{label:"Break up summarization into multiple parts", hint:"Split long pages at section boundaries; summarize each part; join outputs verbatim.", tip:"For small-context models and very large pages. Only kicks in when the checkbox is on AND the page exceeds the trigger size below; smaller pages are summarized whole. Each part is summarized separately with the current Mode rules and the outputs are joined deterministically with '## heading' separators — there is NO final LLM call, so a model that can't hold the whole page still works.", type:"checkbox", mini:"Chunked summarization"},
+    MODE:{label:"Mode", hint:"What OpenWebUI receives for each result.", tip:"summary: detailed LLM summary (1 LLM call per result). summary with caveman: the same detailed summary, written in telegraphic style (1 call). original (pass through): raw search text verbatim, zero LLM calls — only useful for caching results or bypassing summarization; it is incompatible with the image-URL and chunked-summarization options, which are automatically turned off while it is active. original with caveman: full telegraphic rewrite, nothing omitted (1 call). Failed LLM calls fall back to highlights, then raw text.", type:"select", options:[["summary","Summary"],["summary-caveman","Summary with caveman"],["original","Original (pass through)"],["original-caveman","Original with caveman"]]},
+    SUMMARY_MIN_CHARS:{label:"Chars to trigger summary", hint:"Pages this long (or longer) get summarized; shorter ones pass through untouched.", tip:"Gate for summary modes: a page only goes to the local LLM when its text reaches this many characters. Shorter pages are returned to OpenWebUI verbatim — zero LLM calls, no rewriting, not even the image footer — which saves the most time on small quick-answer pages. 10000 is a sane start; 0 summarizes everything (previous behavior). Original (pass through) mode never calls the LLM regardless.", type:"number", min:0, step:500},
+    RETURN_IMAGE_URLS:{label:"Return image URLs in body as text", hint:"Append page image URLs to the snippet as plain text.", tip:"Collects the result's representative image plus any markdown-embedded image URLs and appends an 'Images on page' list AFTER the snippet body — the URLs are never summarized away and the downstream LLM can fetch them. Costs no extra LLM calls. Incompatible with Original (pass through) mode (the body must stay verbatim): it is automatically turned off and locked while that mode is active.", type:"checkbox"},
+    CHUNKED_SUMMARY:{label:"Break up summarization into multiple parts", hint:"Split long pages at section boundaries; summarize each part; join outputs verbatim.", tip:"For small-context models and very large pages. Only kicks in when the checkbox is on AND the page exceeds the trigger size below; smaller pages are summarized whole. Each part is summarized separately with the current Mode rules and the outputs are joined deterministically with '## heading' separators — there is NO final LLM call, so a model that can't hold the whole page still works. Incompatible with Original (pass through) mode (nothing is summarized there): it is automatically turned off and locked while that mode is active.", type:"checkbox", mini:"Chunked summarization"},
     CHUNK_MIN_CHARS:{label:"Trigger above this many chars", hint:"Pages longer than this get chunked (when enabled).", tip:"Gate for chunked mode: pages at or under this length are summarized whole in one call, longer pages are split into parts of the size below. 5000 is a sane start; lower it if your model struggles sooner, raise it to keep single-call behavior on bigger pages.", type:"number", min:500, mini:"Chunked summarization"},
     CHUNK_TARGET_CHARS:{label:"Chars per part", hint:"Target size of each part (paragraph-safe).", tip:"Only used when 'Break up summarization into multiple parts' is on and the page exceeds the trigger size. Splitting is paragraph-boundary based, so parts land close to but sometimes under this value; a single paragraph is never split. 500 minimum.", type:"number", min:500, mini:"Chunked summarization"},
     LLAMACPP_USE_SLOTS:{label:"Manage slots", hint:"Rotate each job across the available slots.", tip:"When on, every dispatched summary job is assigned the next slot id in 0..N-1 (round-robin), so concurrent jobs land on different slots instead of piling onto one. A job that lands on a busy slot simply waits its turn — the server defers it, no error. Read only when the provider is llama.cpp.", type:"checkbox", mini:"LlamaCPP slot IDs"},
@@ -162,7 +166,7 @@ const GROUPS = [
   {title:"Timeouts", tag:"seconds", desc:"How long the proxy waits before falling back.", fields:{
     LLM_TIMEOUT_SEC:{label:"Per-summary timeout", hint:"Timeout for one summary call.", tip:"Large reasoning models need minutes — a detailed summary measured 30–60s on 2× RTX 3080. On timeout that single result falls back to highlights/raw text while the rest of the search continues.", type:"number"},
     EXA_TIMEOUT_SEC:{label:"Search timeout", hint:"Timeout for one search API call.", tip:"If the search API does not answer in time, the whole search returns [] and OpenWebUI shows no results. 20s is generous; raise it on slow networks.", type:"number"},
-    REQUEST_TIMEOUT_SEC:{label:"Whole-search timeout", hint:"Ceiling for the whole search, queue wait included.", tip:"Covers fetch plus all sequential summaries plus waiting behind other searches (single-flight). A count=5 search is ~5 summaries back-to-back — size this at summaries × per-summary time plus queue headroom, or long searches abort to whatever finished.", type:"number"}
+    REQUEST_TIMEOUT_SEC:{label:"Whole-search timeout", hint:"Ceiling for the whole search, queue wait included.", tip:"Covers fetch plus all sequential summaries plus waiting behind other searches (single-flight). A count=5 search is ~5 summaries back-to-back — size this at summaries × per-summary time plus queue headroom. At the deadline, finished summaries are kept (and cached) and unfinished results fall back to highlights/raw text; that search is not stored in the query cache.", type:"number"}
   }},
   {title:"Content limits & queueing", tag:"sizes", desc:"How many summaries run at once. Per-result text caps are inside the Advanced section.", advanced:["EXA_TEXT_MAX_CHARS","SUMMARY_INPUT_MAX_CHARS"], fields:{
     MAX_CONCURRENT_SUMMARIES:{label:"Concurrent summaries", hint:"Summaries running at once (1 = single-file queue).", tip:"Global cap shared by ALL concurrent searches, not per search. 1 means strictly one prompt in flight against the backend; everything else waits FIFO. Raise only if the backend genuinely executes jobs in parallel — otherwise extra concurrency just queues inside the backend.", type:"number"},
@@ -219,6 +223,9 @@ async function health(){
 }
 
 function buildForm(cfg){
+  const meta0 = cfg._meta || {};
+  const envLocked = meta0.env_locked || [];
+  document.getElementById('credwarn').hidden = !meta0.default_admin_creds;
   const host = document.getElementById('form'); host.innerHTML = '';
   GROUPS.forEach(g => {
     const card = document.createElement('div'); card.className = 'card';
@@ -264,6 +271,7 @@ function buildForm(cfg){
           inp.appendChild(o);
         });
         inp.addEventListener('change', refreshLlamaCpp);
+        inp.addEventListener('change', refreshModeDeps);
       } else if(meta.type === 'checkbox'){
         inp = document.createElement('input'); inp.type = 'checkbox';
         inp.checked = cfg[key] === true || String(cfg[key]).toLowerCase() === 'true';
@@ -295,6 +303,11 @@ function buildForm(cfg){
         wrap.appendChild(det);
       }
       if(meta.hint){ const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = meta.hint; wrap.appendChild(hint); }
+      if(envLocked.includes(key)){
+        const lock = document.createElement('div'); lock.className = 'envlock';
+        lock.textContent = 'Set by environment (.env / compose): a change here applies now but reverts on restart. Edit .env to make it permanent.';
+        wrap.appendChild(lock);
+      }
       if(meta.mini){
         (miniGroups[meta.mini] = miniGroups[meta.mini] || []).push(wrap);
       } else {
@@ -313,6 +326,7 @@ function buildForm(cfg){
     host.appendChild(card);
   });
   refreshLlamaCpp();
+  refreshModeDeps();
 }
 
 // The "LlamaCPP slot IDs" mini-section only makes sense for the llama.cpp
@@ -327,6 +341,23 @@ function refreshLlamaCpp(){
   const isLlama = prov.value === 'llamacpp';
   if(sub) sub.style.display = isLlama ? '' : 'none';
   num.disabled = !box.checked;
+}
+
+// "Original (pass through)" sends the raw text verbatim: the image-URL and
+// chunked-summarization options are incompatible with it, so the server
+// forces both off whenever that mode is active. Mirror that here by
+// unchecking and locking them; another mode unlocks them (staying off --
+// save to apply the mode, then re-enable if wanted).
+function refreshModeDeps(){
+  const mode = document.getElementById('cfg_MODE');
+  if(!mode) return;
+  const isOriginal = mode.value === 'original';
+  ['RETURN_IMAGE_URLS','CHUNKED_SUMMARY'].forEach(key => {
+    const el = document.getElementById('cfg_' + key);
+    if(!el) return;
+    el.disabled = isOriginal;
+    if(isOriginal) el.checked = false;
+  });
 }
 
 async function load(manual){
@@ -358,7 +389,9 @@ async function save(){
     const applied = data.applied || [];
     await load(false);
     // re-mask secret inputs after rebuild
-    if(applied.length) say('ok', 'Saved — applied: ' + applied.join(', ') + '.');
+    const locked = data.env_locked || [];
+    if(applied.length) say(locked.length ? 'info' : 'ok', 'Saved — applied: ' + applied.join(', ') + '.' +
+      (locked.length ? ' Note: ' + locked.join(', ') + ' also set in the environment — will revert on restart unless changed in .env.' : ''));
     else say('info', 'Saved — no changes (values identical or secrets left empty).');
   }catch(e){ say('err', 'Save failed: ' + e.message); }
   finally{ setBusy(false); }
@@ -426,7 +459,7 @@ async function test(){
     const mode = payload.mode || 'summary';
     const secs = ((Date.now()-t0)/1000).toFixed(0);
     say('ok', 'Test search finished: ' + data.length + ' result(s) in ' + secs + 's (mode: ' + mode + ').');
-    const srcName = {llm:'LLM summary', 'llm-parts':'LLM summaries per part, joined', original:'Original (no changes)', passthrough:'Passed through (below trigger size)', highlights:'Search highlights (LLM fallback)', text:'Search text (LLM fallback)', empty:'empty'};
+    const srcName = {llm:'LLM summary', 'llm-parts':'LLM summaries per part, joined', original:'Original (pass through)', passthrough:'Passed through (below trigger size)', highlights:'Search highlights (LLM fallback)', text:'Search text (LLM fallback)', empty:'empty'};
     data.forEach(item => {
       const card = document.createElement('div'); card.className = 'result';
       const title = document.createElement('div');
@@ -434,7 +467,8 @@ async function test(){
       a.textContent = item.title || item.link; title.appendChild(a);
       const badge = document.createElement('span'); badge.className = 'badge ' + item.snippet_source;
       badge.title = 'Which source filled the snippet sent to OpenWebUI';
-      badge.textContent = srcName[item.snippet_source] || item.snippet_source;
+      badge.textContent = (srcName[item.snippet_source] || item.snippet_source) +
+        (item.fallback_reason === 'timeout' ? ' — summary timed out' : item.fallback_reason === 'error' ? ' — summary errored' : '');
       title.appendChild(badge); card.appendChild(title);
 
       const cmp = document.createElement('div'); cmp.className = 'compare';
@@ -460,7 +494,7 @@ async function test(){
       const rh = document.createElement('h3');
       const showComparison = item.comparison_summary != null && !(item.part_summaries && item.part_summaries.length);
       const rightText = item.snippet || '';
-      const sentName = {summary:'Summary', original:'Original', 'summary-caveman':'Summary with caveman', 'original-caveman':'Original with caveman'}[mode] || mode;
+      const sentName = {summary:'Summary', original:'Original (pass through)', 'summary-caveman':'Summary with caveman', 'original-caveman':'Original with caveman'}[mode] || mode;
       rh.textContent = sentName + ' → OpenWebUI ';
       const rcnt = document.createElement('span'); rcnt.className = 'cnt';
       rcnt.textContent = '· ' + rightText.length.toLocaleString() + ' chars';
@@ -522,7 +556,7 @@ async function cacheStats(){
 
 async function cacheClear(){
   try{
-    const r = await fetch('/cache/clear', {method:'POST'});
+    const r = await fetch('/cache/clear', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
     const data = await r.json();
     if(!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
     say('ok', 'Cache cleared (' + data.cleared + ' entries removed).');

@@ -7,13 +7,18 @@ LABEL org.opencontainers.image.title="SSALMP" \
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /code
 
+RUN useradd --system --uid 10001 --user-group --no-create-home app \
+ && mkdir -p /data && chown app:app /data
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # Durable config lives here (mounted as a volume in docker-compose.yml).
 VOLUME ["/data"]
 
 EXPOSE 8555
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8555"]

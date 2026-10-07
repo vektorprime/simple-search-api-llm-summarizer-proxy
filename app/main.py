@@ -12,6 +12,7 @@ Flow per request:
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import pathlib
 import re
@@ -47,6 +48,24 @@ def _check_admin(creds: HTTPBasicCredentials = Depends(_basic)) -> None:
         )
 
 
+def _check_admin_write(request: Request, _: None = Depends(_check_admin)) -> None:
+    """Admin auth + JSON-only body for state-changing admin endpoints.
+
+    Browsers resend cached Basic credentials, so a cross-site HTML form could
+    otherwise POST here (a text/plain body that happens to parse as JSON).
+    Forms cannot send application/json without a CORS preflight, which this
+    app never grants — requiring it blocks that CSRF path.
+    """
+    ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if ctype != "application/json":
+        raise HTTPException(status_code=415, detail="Content-Type must be application/json")
+
+
+if config.ADMIN_USER == "admin" and config.ADMIN_PASS == "admin":
+    log.warning("admin login is the default admin/admin — set ADMIN_USER/ADMIN_PASS "
+                "in .env; anyone reaching this port can change settings")
+
+
 def _check_auth(authorization: str | None) -> None:
     # Open endpoint by design: accept any (or no) API key from OpenWebUI.
     # PROXY_API_KEY is kept for display only and is NOT enforced.
@@ -58,12 +77,13 @@ def _dedupe_items(items: list[dict]) -> list[dict]:
 
     Exa occasionally returns the same URL twice in one response; without
     this we'd summarize (and bill LLM calls for) the identical page twice.
-    Normalizes trailing slashes so '…/page' and '…/page/' match.
+    Uses the link cache's URL normalization (host case, trailing slash,
+    fragment), so two results never race for the same link-cache key.
     """
     seen: set[str] = set()
     out: list[dict] = []
     for it in items:
-        url = (it.get("url") or it.get("link") or "").rstrip("/")
+        url = cache_mod.normalize_url(it.get("url") or it.get("link") or "")
         if not url or url in seen:
             if url:
                 log.info("dropping duplicate search result: %s", url)
@@ -117,11 +137,19 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
     title = item.get("title")
     text = item.get("text") or ""
     highlights = item.get("highlights") if isinstance(item.get("highlights"), list) else []
-    image_urls = _image_urls(item) if config.RETURN_IMAGE_URLS else []
+    # Defensive: image URLs never mix with original pass-through (config
+    # forces RETURN_IMAGE_URLS off in that mode; this guards odd env combos).
+    want_images = config.RETURN_IMAGE_URLS and use_mode != "original"
+    image_urls = _image_urls(item) if want_images else []
     snippet, source = "", "empty"
     slot_id: int | None = None
     part_summaries: list[dict] | None = None
     passthrough = False
+    # True when an LLM call was made and failed (fully, or for some chunked
+    # parts). Such results are served but never cached, so a degraded answer
+    # is not frozen after the backend recovers. Text-less pages never reach
+    # the LLM, so their highlight fallback is deterministic and cacheable.
+    llm_failed = False
     if (
         use_mode != "original"
         and text.strip()
@@ -159,6 +187,7 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
             good = [s for s in part_summaries if s["summary"]]
             dropped = len(parts) - len(good)
             if dropped:
+                llm_failed = True
                 log.warning("chunked summary: dropped %d/%d parts for %s", dropped, len(parts), url)
             snippet = "\n\n".join(
                 f"## {p['heading'] or 'Part ' + str(i + 1)}\n\n{p['summary']}".strip()
@@ -176,6 +205,8 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
                 )
             if snippet:
                 source = "llm"
+            else:
+                llm_failed = True
     else:
         slot_id = None
     if not snippet:
@@ -192,8 +223,81 @@ async def _summarize_item(query: str, item: dict, mode: str | None = None) -> tu
         "exa_highlights": highlights,
         "image_urls": image_urls,
         "part_summaries": part_summaries,
+        "cacheable": not llm_failed,
     }
     return SearchResult(link=url, title=title, snippet=snippet), debug
+
+
+def _fallback_result(item: dict, reason: str) -> tuple[SearchResult, dict]:
+    """Highlights/text result for an item whose summary timed out or crashed.
+
+    Same shape as _summarize_item's output; never cacheable.
+    """
+    url = item.get("url") or item.get("link") or ""
+    title = item.get("title")
+    text = item.get("text") or ""
+    want_images = config.RETURN_IMAGE_URLS and config.MODE != "original"
+    image_urls = _image_urls(item) if want_images else []
+    snippet, source = _fallback_snippet(item)
+    snippet = _with_images(snippet, image_urls)
+    debug = {
+        "link": url,
+        "title": title,
+        "snippet": snippet,
+        "snippet_source": source,
+        "slot_id": None,
+        "exa_text": text,
+        "exa_highlights": item.get("highlights") if isinstance(item.get("highlights"), list) else [],
+        "image_urls": image_urls,
+        "part_summaries": None,
+        "cacheable": False,
+        "fallback_reason": reason,
+    }
+    return SearchResult(link=url, title=title, snippet=snippet), debug
+
+
+async def _summarize_all(
+    query: str, items: list[dict], timeout: float, on_done=None
+) -> list[tuple[SearchResult, dict]]:
+    """Summarize items concurrently under one deadline, keeping partial work.
+
+    Each finished item is passed to on_done(index, result) as soon as it
+    completes (so the link cache fills even if the request later times
+    out). At the deadline, unfinished items are cancelled and fall back to
+    highlights/text; an item that raises falls back the same way. Results
+    are returned in input order — one slow page never empties the search.
+    """
+    async def _run(i: int, it: dict) -> tuple[SearchResult, dict]:
+        res = await _summarize_item(query, it)
+        if on_done is not None:
+            on_done(i, res)
+        return res
+
+    tasks = [asyncio.create_task(_run(i, it)) for i, it in enumerate(items)]
+    if not tasks:
+        return []
+    try:
+        _, pending = await asyncio.wait(tasks, timeout=max(0.0, timeout))
+        if pending:
+            log.warning("summary deadline hit: %d/%d results fell back to highlights/text",
+                        len(pending), len(tasks))
+    finally:
+        # Also covers the client disconnecting mid-search: no orphan tasks
+        # keep holding summary slots.
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    out: list[tuple[SearchResult, dict]] = []
+    for t, it in zip(tasks, items):
+        if t.cancelled():
+            out.append(_fallback_result(it, "timeout"))
+        elif t.exception() is not None:
+            log.warning("summarize failed for %s: %r", it.get("url"), t.exception())
+            out.append(_fallback_result(it, "error"))
+        else:
+            out.append(t.result())
+    return out
 
 
 # llama.cpp slot rotation: each dispatched job takes the next id in
@@ -213,21 +317,70 @@ def _rotated_slot_id() -> int | None:
     return slot
 
 
-# Global semaphore shared by ALL requests (not per-request), so the LLM
+class _SummaryLimiter:
+    """FIFO concurrency cap that reads MAX_CONCURRENT_SUMMARIES live.
+
+    Unlike swapping in a fresh asyncio.Semaphore on resize (which let old
+    holders and new entrants run side by side, exceeding the cap), one
+    counter is kept across resizes: shrinking the limit lets in-flight jobs
+    finish and admits no one until the count drops below it; growing it
+    admits queued jobs at once (call wake()). All bookkeeping is synchronous,
+    so it is safe without a lock on a single event loop.
+    """
+
+    def __init__(self) -> None:
+        self._active = 0
+        self._waiters: collections.deque[asyncio.Future] = collections.deque()
+
+    @staticmethod
+    def _limit() -> int:
+        return max(1, config.MAX_CONCURRENT_SUMMARIES)
+
+    def wake(self) -> None:
+        while self._waiters and self._active < self._limit():
+            fut = self._waiters.popleft()
+            if not fut.done():
+                self._active += 1  # slot handed straight to the waiter
+                fut.set_result(None)
+
+    async def __aenter__(self) -> None:
+        if not self._waiters and self._active < self._limit():
+            self._active += 1
+            return
+        fut = asyncio.get_running_loop().create_future()
+        self._waiters.append(fut)
+        try:
+            await fut
+        except asyncio.CancelledError:
+            if fut.done() and not fut.cancelled():
+                # slot was granted just as we were cancelled: give it back
+                self._active -= 1
+                self.wake()
+            else:
+                try:
+                    self._waiters.remove(fut)
+                except ValueError:
+                    pass
+            raise
+
+    async def __aexit__(self, *exc) -> None:
+        self._active -= 1
+        self.wake()
+
+
+# Global limiter shared by ALL requests (not per-request), so the LLM
 # backend never sees more than MAX_CONCURRENT_SUMMARIES concurrent prompts.
-# Rebuilt when the running loop or the configured size changes
-# (size is tunable at runtime via /admin).
-_global_sem: asyncio.Semaphore | None = None
-_global_sem_key: tuple[int, int] | None = None
+# Rebuilt only when the running event loop changes (tests).
+_global_sem: _SummaryLimiter | None = None
+_global_sem_loop: int | None = None
 
 
-def _global_summary_sem() -> asyncio.Semaphore:
-    global _global_sem, _global_sem_key
-    size = max(1, config.MAX_CONCURRENT_SUMMARIES)
-    key = (id(asyncio.get_running_loop()), size)
-    if _global_sem is None or _global_sem_key != key:
-        _global_sem = asyncio.Semaphore(size)
-        _global_sem_key = key
+def _global_summary_sem() -> _SummaryLimiter:
+    global _global_sem, _global_sem_loop
+    loop_id = id(asyncio.get_running_loop())
+    if _global_sem is None or _global_sem_loop != loop_id:
+        _global_sem = _SummaryLimiter()
+        _global_sem_loop = loop_id
     return _global_sem
 
 
@@ -258,7 +411,7 @@ async def get_config(_: None = Depends(_check_admin)) -> JSONResponse:
 
 
 @app.post("/config")
-async def post_config(req: Request, _: None = Depends(_check_admin)) -> JSONResponse:
+async def post_config(req: Request, _: None = Depends(_check_admin_write)) -> JSONResponse:
     try:
         updates = await req.json()
     except Exception:
@@ -266,8 +419,20 @@ async def post_config(req: Request, _: None = Depends(_check_admin)) -> JSONResp
     if not isinstance(updates, dict):
         raise HTTPException(status_code=400, detail="Body must be a JSON object")
     allowed = {k: v for k, v in updates.items() if k in config.EDITABLE_FIELDS}
+    errors = config.validate_updates(allowed)
+    if errors:
+        # all-or-nothing: nothing is applied when any field is invalid
+        raise HTTPException(
+            status_code=400, detail="; ".join(f"{k}: {msg}" for k, msg in errors.items())
+        )
     applied = config.update_config(allowed)
-    return JSONResponse(content={"applied": applied, "config": config.public_config()})
+    if "MAX_CONCURRENT_SUMMARIES" in applied:
+        _global_summary_sem().wake()  # a raised cap admits queued jobs now
+    return JSONResponse(content={
+        "applied": applied,
+        "env_locked": [k for k in applied if k in config.env_locked_fields()],
+        "config": config.public_config(),
+    })
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -341,17 +506,11 @@ async def cache_stats(_: None = Depends(_check_admin)) -> JSONResponse:
 
 
 @app.post("/cache/clear")
-async def cache_clear(_: None = Depends(_check_admin)) -> JSONResponse:
+async def cache_clear(_: None = Depends(_check_admin_write)) -> JSONResponse:
     """Admin-only: drop all cached entries (memory + disk)."""
     removed = cache_mod.clear()
     log.info("cache cleared: %d entries removed", removed)
     return JSONResponse(content={"cleared": removed, "cache": cache_mod.stats()})
-
-
-# Sources that are safe to cache: real summaries / verbatim modes. Fallback
-# sources (highlights/text/empty) mean the LLM failed — caching those would
-# freeze a degraded result even after the backend recovers.
-_CACHEABLE_SOURCES = {"llm", "llm-parts", "original", "passthrough"}
 
 
 @app.post("/search")
@@ -361,6 +520,8 @@ async def search(
     _check_auth(authorization)
     if not req.query.strip():
         return JSONResponse(content=[])
+    # One deadline for the whole request: search + summaries (incl. queueing).
+    deadline = asyncio.get_running_loop().time() + config.REQUEST_TIMEOUT_SEC
     norm_query = cache_mod.normalize_query(req.query)
     fp = cache_mod.fingerprint() if config.CACHE_ENABLED else {}
     cache_key = cache_mod.cache_key(norm_query, req.count, fp) if config.CACHE_ENABLED else ""
@@ -395,13 +556,14 @@ async def search(
                 return JSONResponse(
                     content=stale.get("payload", []), headers={"X-Cache": "REVALIDATED"}
                 )
+            cache_mod.record_miss()
             log.info("cache stale mismatch, regenerating: %r", norm_query)
 
     # Stage 2 (link cache): on a query miss, reuse per-URL summaries whose
     # stored page text matches the fresh Exa text — even across different
     # queries. Only links needing (re)generation reach the LLM.
-    # prefilled[i] holds (SearchResult, {"snippet_source": ...}) in sliced
-    # order; pending lists (idx, item, link_key, url_norm, canon_one).
+    # prefilled[i] holds (SearchResult, debug) in sliced order; pending
+    # lists (idx, item, link_key, url_norm, canon_one).
     prefilled: list[tuple[SearchResult, dict] | None] = [None] * len(sliced)
     pending: list[tuple[int, dict, str, str, dict]] = []
     link_stage = config.CACHE_ENABLED and config.CACHE_LINK_ENABLED
@@ -420,7 +582,7 @@ async def search(
                 link_hits += 1
                 prefilled[i] = (
                     SearchResult(link=url, title=it.get("title"), snippet=snippet),
-                    {"snippet_source": source or "llm", "link_key": lkey},
+                    {"snippet_source": source or "llm", "link_key": lkey, "cacheable": True},
                 )
             else:
                 pending.append((i, it, lkey, url_norm, canon_one))
@@ -429,39 +591,36 @@ async def search(
     if link_stage:
         log.info("link cache: %d/%d hits for %r", link_hits, len(sliced), norm_query)
 
-    try:
-        done = (
-            await asyncio.wait_for(
-                asyncio.gather(*(_summarize_item(req.query, it) for _, it, _, _, _ in pending)),
-                timeout=config.REQUEST_TIMEOUT_SEC,
-            )
-            if pending
-            else []
-        )
-    except Exception as e:
-        log.warning("summarization pipeline failed: %s", e)
-        return JSONResponse(content=[])
+    def _store_link(j: int, result: tuple[SearchResult, dict]) -> None:
+        # Runs as each summary finishes, so finished work is cached even if
+        # the request deadline later cuts off slower results.
+        _, _, lkey, url_norm, canon_one = pending[j]
+        res, dbg = result
+        if link_stage and lkey and res.link and res.snippet and dbg.get("cacheable"):
+            cache_mod.put_link(lkey, url_norm, fp, res.snippet, dbg.get("snippet_source"), canon_one)
 
-    for (i, it, lkey, url_norm, canon_one), (res, dbg) in zip(pending, done):
-        prefilled[i] = (res, dbg)
-        if link_stage and lkey and res.link and (res.snippet or ""):
-            src = dbg.get("snippet_source")
-            if src in _CACHEABLE_SOURCES:
-                cache_mod.put_link(lkey, url_norm, fp, res.snippet or "", src, canon_one)
+    done = await _summarize_all(
+        req.query,
+        [it for _, it, _, _, _ in pending],
+        deadline - asyncio.get_running_loop().time(),
+        on_done=_store_link,
+    )
+    for (i, *_), pair in zip(pending, done):
+        prefilled[i] = pair
     pairs = [p for p in prefilled if p is not None]
 
     # drop items with no URL; OpenWebUI tolerates fewer than `count`
     payload = [r.model_dump() for r, _ in pairs if r.link]
     if config.CACHE_ENABLED and payload:
         sources = {dbg.get("snippet_source") for _, dbg in pairs}
-        if sources and sources <= _CACHEABLE_SOURCES:
+        if all(dbg.get("cacheable") for _, dbg in pairs):
             cache_mod.put(
                 cache_key, norm_query, req.count, fp, payload,
                 cache_mod.canonical_exa(sliced),
             )
             log.info("cache store: %r count=%d sources=%s", norm_query, req.count, sources)
         else:
-            log.info("cache skip (fallback sources): %r sources=%s", norm_query, sources)
+            log.info("cache skip (LLM failure/timeout): %r sources=%s", norm_query, sources)
         headers = {"X-Cache": "MISS"}
         if link_stage:
             headers["X-Link-Cache"] = f"{link_hits}/{len(sliced)}"
@@ -470,7 +629,7 @@ async def search(
 
 
 @app.post("/debug/search")
-async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> JSONResponse:
+async def debug_search(req: SearchRequest, _: None = Depends(_check_admin_write)) -> JSONResponse:
     """Admin-only: full pipeline trace per result.
 
     Returns {"mode": ..., "results": [{link, title, snippet, snippet_source,
@@ -485,6 +644,7 @@ async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> J
     """
     if not req.query.strip():
         return JSONResponse(content={"results": []})
+    deadline = asyncio.get_running_loop().time() + config.REQUEST_TIMEOUT_SEC
     try:
         items = await asyncio.wait_for(
             exa_search(req.query, req.count),
@@ -496,14 +656,9 @@ async def debug_search(req: SearchRequest, _: None = Depends(_check_admin)) -> J
     if not items:
         return JSONResponse(content={"results": []})
     items = _dedupe_items(items)
-    try:
-        pairs = await asyncio.wait_for(
-            asyncio.gather(*(_summarize_item(req.query, it) for it in items[: req.count])),
-            timeout=config.REQUEST_TIMEOUT_SEC,
-        )
-    except Exception as e:
-        log.warning("debug summarization pipeline failed: %s", e)
-        return JSONResponse(content={"results": [], "error": str(e)})
+    pairs = await _summarize_all(
+        req.query, items[: req.count], deadline - asyncio.get_running_loop().time()
+    )
     results = [dbg for r, dbg in pairs if r.link]
     if config.MODE == "summary":
         for dbg in results:

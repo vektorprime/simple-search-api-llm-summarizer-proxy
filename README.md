@@ -6,7 +6,8 @@ that returns detailed LLM summaries in snippet instead of raw page text.
 Admin web UI included: open /admin on the running container
 (e.g. http://<YOUR SERVER IP>:8555/admin) — login admin / admin
 (change ADMIN_USER / ADMIN_PASS). Every setting below can be viewed,
-tested, and changed there; saves persist across restarts.
+tested, and changed there; saves persist across restarts (except settings
+also set in the environment / `.env`, which win at startup — the UI flags those).
 
 ```
 OpenWebUI                    SSALMP proxy               Search API + LLM
@@ -28,7 +29,9 @@ OpenAI-compatible LLM endpoint (llama.cpp, vLLM, or SGLang).
 
 ```bash
 cp .env.example .env
-# edit .env: at minimum set EXA_API_KEY and LLM_BASE_URL
+# edit .env: set EXA_API_KEY and ADMIN_USER/ADMIN_PASS. Keys set in .env
+# override the admin UI on every restart, so leave the rest commented and
+# configure LLM_BASE_URL etc. in /admin (or uncomment to pin them).
 # NOTE (containers): LLM_BASE_URL must be reachable FROM the container —
 # 127.0.0.1 inside the container means the container itself, so use the
 # host LAN IP (e.g. http://10.0.0.187:8003/v1), never localhost.
@@ -78,13 +81,24 @@ Stage 2 (link, `CACHE_LINK_ENABLED=true` by default): after the search API answe
 (normalized host, no trailing slash/fragment) reuses its stored summary when the stored page text
 matches the fresh result exactly — even for a completely different query — saving one LLM call per
 hit (`X-Link-Cache: hits/links`). Changed pages regenerate just that link.
-Only full successes (no fallback snippets) are cached at either stage. `/debug/search` always bypasses the cache.
+Results where an LLM call failed or timed out (including chunked summaries with a dropped part) are
+served but never cached at either stage. Pages with no text never reach the LLM, so their highlight
+fallback is deterministic and is cached. `/debug/search` always bypasses the cache.
+`REQUEST_TIMEOUT_SEC` is one deadline for the whole search: at the deadline finished summaries are
+kept (and link-cached) and unfinished results fall back to highlights/text.
+
+Admin `POST` endpoints (`/config`, `/cache/clear`, `/debug/search`) require
+`Content-Type: application/json` (blocks cross-site form CSRF). Changing
+`EXA_BASE_URL` / `LLM_BASE_URL` via `/config` requires re-sending the matching
+API key in the same request, so a stored key is never redirected to a new host.
 
 ## Configuration
 
 Precedence: **built-in defaults < config file < environment variables**.
 Every change made in `/admin` is written to the config file immediately and
-survives restarts:
+survives restarts — unless the same key is also set in the environment
+(`.env` / compose), which wins again at the next start; the admin UI marks
+those fields:
 
 | Var | Default | Notes |
 |---|---|---|
@@ -94,9 +108,9 @@ survives restarts:
 | `PROXY_API_KEY` | display only | `/search` accepts **any** API key (or none); value shown in admin UI only |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin`/`admin` | **Change these**; Basic auth for `/admin`, `/config` |
 | `LLM_PROVIDER` | `llamacpp` | `llamacpp` \| `vllm` \| `sglang`. Same chat API for all; only gates backend-specific options (slot pinning) |
-| `MODE` | `summary` | `summary` \| `summary-caveman` \| `original` \| `original-caveman`. `summary-caveman` is the same detailed summary in telegraphic style; `original` returns raw text with no LLM call |
-| `RETURN_IMAGE_URLS` | `false` | append page image URLs to the snippet body as text, so the downstream LLM can retrieve them |
-| `CHUNKED_SUMMARY` | `false` | split pages over `CHUNK_MIN_CHARS` at paragraph/section boundaries, summarize each part with the Mode rules, join outputs verbatim — no final LLM call. For small-context models and very large pages |
+| `MODE` | `summary` | `summary` \| `summary-caveman` \| `original` \| `original-caveman`. `summary-caveman` is the same detailed summary in telegraphic style; `original` (pass through) returns raw text verbatim with no LLM call — only useful for caching results or bypassing summarization, and forces `RETURN_IMAGE_URLS` + `CHUNKED_SUMMARY` off while active (incompatible) |
+| `RETURN_IMAGE_URLS` | `false` | append page image URLs to the snippet body as text, so the downstream LLM can retrieve them; automatically off while `MODE=original` (pass through) |
+| `CHUNKED_SUMMARY` | `false` | split pages over `CHUNK_MIN_CHARS` at paragraph/section boundaries, summarize each part with the Mode rules, join outputs verbatim — no final LLM call. For small-context models and very large pages; automatically off while `MODE=original` (pass through) |
 | `CHUNK_TARGET_CHARS` | `2600` | target part size when `CHUNKED_SUMMARY` is on; paragraph-boundary based so parts land at/under this |
 | `CHUNK_MIN_CHARS` | `5000` | trigger: only pages longer than this are chunked (and only when enabled); shorter pages summarize whole |
 | `CAVEMAN_STYLE` | legacy | `true` behaves like `MODE=original-caveman` when `MODE` is unset |
@@ -126,6 +140,6 @@ versions).
 ## Tests
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 pytest -q
 ```

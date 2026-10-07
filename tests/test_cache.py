@@ -456,7 +456,9 @@ def test_debug_search_bypasses_cache_and_stats_clear_require_auth(tmp_path):
             assert s.json()["query_entries"] == 1
             assert s.json()["link_entries"] == 1
             assert s.json()["enabled"] is True
-            c = client.post("/cache/clear", headers=_basic())
+            # CSRF guard: authenticated but not JSON -> rejected, nothing cleared
+            assert client.post("/cache/clear", headers=_basic()).status_code == 415
+            c = client.post("/cache/clear", json={}, headers=_basic())
             assert c.status_code == 200
             assert c.json()["cleared"] == 2
             assert client.get("/cache/stats", headers=_basic()).json()["size"] == 0

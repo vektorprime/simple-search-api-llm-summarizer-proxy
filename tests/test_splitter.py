@@ -48,3 +48,15 @@ def test_pilcrow_stripped_from_heading_label():
     text = "# Event Loop¶\n\n" + "body " * 800
     parts = split_text(text, 1500)
     assert parts[0][0] == "Event Loop"
+
+
+def test_body_on_line_after_heading_is_kept():
+    # `## H\nbody` (no blank line) is common markdown: the body must not be
+    # dropped along with the heading line.
+    text = ("## Intro\nFACT_A lives right under the heading.\n\n" + "filler para. " * 60
+            + "\n\n## Pricing\nFACT_B costs $42.\n\n" + "more filler. " * 60)
+    parts = split_text(text, 600)
+    joined = "\n".join(c for _, c in parts)
+    assert "FACT_A" in joined and "FACT_B" in joined
+    assert not any("## " in c for _, c in parts)  # heading line itself still stripped
+    assert ("Pricing", "FACT_B costs $42.") in [(h, c.split("\n\n")[0]) for h, c in parts]

@@ -26,7 +26,6 @@ def _load_file_values() -> dict:
     if os.path.abspath(path) != os.path.abspath("./config.json"):
         return {}  # explicit CONFIG_FILE that doesn't exist: don't sniff .env
     # one-time legacy import: plain KEY=VALUE .env in the working directory
-    # one-time legacy import: plain KEY=VALUE .env in the working directory
     dotenv = os.path.join(os.getcwd(), ".env")
     values: dict[str, str] = {}
     if os.path.exists(dotenv):
@@ -127,7 +126,9 @@ _LEGACY_CAVEMAN: bool = _get_bool("CAVEMAN_STYLE", False)
 # --- Operation mode ---
 # summary: detailed LLM summary (default)
 # summary-caveman: LLM summary in telegraphic caveman style
-# original: raw search text, unchanged, no LLM call
+# original: raw search text passed through verbatim, no LLM call (only
+#           useful for caching / bypassing summarization; incompatible
+#           options RETURN_IMAGE_URLS and CHUNKED_SUMMARY are forced off)
 # original-caveman: full telegraphic rewrite via LLM, nothing omitted
 _VALID_MODES = ("summary", "summary-caveman", "original", "original-caveman")
 
@@ -150,6 +151,27 @@ CHUNKED_SUMMARY: bool = _get_bool("CHUNKED_SUMMARY", False)
 CHUNK_TARGET_CHARS: int = _get_int("CHUNK_TARGET_CHARS", 2600)
 # Chunking only kicks in above this many chars (and only when enabled).
 CHUNK_MIN_CHARS: int = _get_int("CHUNK_MIN_CHARS", 5000)
+
+
+# "original" (pass through) hands the raw search text to OpenWebUI verbatim,
+# so the image-URL footer and chunked summarization are incompatible with it:
+# while that mode is active both are forced off (at load and after every
+# runtime update), keeping behavior, cache fingerprint and UI in agreement.
+def _enforce_mode_constraints() -> list[str]:
+    """Force settings incompatible with MODE=original off; return changed names."""
+    import sys
+
+    mod = sys.modules[__name__]
+    changed: list[str] = []
+    if mod.MODE == "original":
+        for name in ("RETURN_IMAGE_URLS", "CHUNKED_SUMMARY"):
+            if getattr(mod, name):
+                setattr(mod, name, False)
+                changed.append(name)
+    return changed
+
+
+_enforce_mode_constraints()
 
 # --- Exa ---
 EXA_BASE_URL: str = _get("EXA_BASE_URL", "https://api.exa.ai")
@@ -250,6 +272,15 @@ def _mask(name: str, value: str) -> str:
     return value
 
 
+def env_locked_fields() -> list[str]:
+    """Editable fields also set in the environment.
+
+    Environment beats the config file at startup, so admin-UI edits to these
+    apply immediately but revert on the next restart.
+    """
+    return [name for name in EDITABLE_FIELDS if name in os.environ]
+
+
 def public_config() -> dict:
     """Current config for the admin UI (secrets masked)."""
     import sys
@@ -260,7 +291,64 @@ def public_config() -> dict:
         val = getattr(mod, name)
         out[name] = _mask(name, str(val)) if isinstance(val, str) else val
     out["PORT"] = PORT
+    out["_meta"] = {
+        "env_locked": env_locked_fields(),
+        "default_admin_creds": ADMIN_USER == "admin" and ADMIN_PASS == "admin",
+    }
     return out
+
+
+# Lowest accepted value per int field (admin UI). Zero/negative timeouts or
+# caps would make every search time out instantly or deadlock the queue.
+_INT_MIN = {
+    "LLM_TIMEOUT_SEC": 1,
+    "EXA_TIMEOUT_SEC": 1,
+    "REQUEST_TIMEOUT_SEC": 1,
+    "MAX_CONCURRENT_SUMMARIES": 1,
+    "LLAMACPP_SLOT_COUNT": 1,
+    "CHUNK_TARGET_CHARS": 500,
+    "CHUNK_MIN_CHARS": 0,
+    "SUMMARY_MIN_CHARS": 0,
+    "CACHE_TTL_SEC": 1,
+    "CACHE_FRESH_SEC": 1,
+    "CACHE_MAX_ENTRIES": 1,
+}
+
+# Changing a provider's base URL re-points where its stored (masked) key is
+# sent, so the key must be re-entered in the same save — otherwise an admin
+# session could silently exfiltrate a secret it is never shown.
+_URL_KEY_PAIRS = (("EXA_BASE_URL", "EXA_API_KEY"), ("LLM_BASE_URL", "LLM_API_KEY"))
+
+
+def validate_updates(updates: dict) -> dict[str, str]:
+    """Return {field: problem} for updates the admin endpoint must reject."""
+    import sys
+
+    mod = sys.modules[__name__]
+    errors: dict[str, str] = {}
+    for name in _EDITABLE_INT:
+        if name not in updates or updates[name] is None:
+            continue
+        raw = updates[name]
+        try:
+            if isinstance(raw, bool):
+                raise ValueError
+            val = int(str(raw).strip())
+        except (ValueError, TypeError):
+            errors[name] = "must be a whole number"
+            continue
+        lo = _INT_MIN.get(name)
+        if lo is not None and val < lo:
+            errors[name] = f"must be at least {lo}"
+    for url_name, key_name in _URL_KEY_PAIRS:
+        if url_name not in updates or updates[url_name] is None:
+            continue
+        new = str(updates[url_name]).strip().rstrip("/")
+        cur = str(getattr(mod, url_name)).strip().rstrip("/")
+        new_key = updates.get(key_name)
+        if new != cur and not (isinstance(new_key, str) and new_key.strip()):
+            errors[url_name] = f"changing it requires re-entering {key_name} in the same save"
+    return errors
 
 
 def update_config(updates: dict) -> list[str]:
@@ -301,6 +389,9 @@ def update_config(updates: dict) -> list[str]:
             applied.append(name)
         except (ValueError, TypeError):
             continue
+    for name in _enforce_mode_constraints():
+        if name not in applied:
+            applied.append(name)
     try:
         save_config_file(applied)
     except Exception:

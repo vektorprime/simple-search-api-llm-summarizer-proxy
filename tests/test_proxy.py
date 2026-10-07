@@ -183,6 +183,48 @@ def test_admin_requires_login_and_updates_config():
     assert "Timeouts" in r.text  # grouped settings render
 
 
+def test_original_mode_forces_incompatible_options_off():
+    import json as _json
+    import os
+
+    try:
+        client, cfg = _client(
+            EXA_API_KEY="k", MODE="original",
+            RETURN_IMAGE_URLS="true", CHUNKED_SUMMARY="true",
+        )
+        # load-time normalization: pass-through is incompatible with both
+        assert cfg.MODE == "original"
+        assert cfg.RETURN_IMAGE_URLS is False
+        assert cfg.CHUNKED_SUMMARY is False
+        pub = client.get("/config", headers=_basic()).json()
+        assert pub["RETURN_IMAGE_URLS"] is False
+        assert pub["CHUNKED_SUMMARY"] is False
+
+        # runtime: turning one on while in original mode sticks off
+        client.post("/config", json={"RETURN_IMAGE_URLS": "true"}, headers=_basic())
+        assert cfg.RETURN_IMAGE_URLS is False
+
+        # switching to original with an option on: forced off, reported + persisted
+        setattr(cfg, "CHUNKED_SUMMARY", True)
+        r = client.post("/config", json={"MODE": "original"}, headers=_basic())
+        assert r.status_code == 200
+        applied = r.json()["applied"]
+        assert "MODE" in applied and "CHUNKED_SUMMARY" in applied
+        assert cfg.CHUNKED_SUMMARY is False
+        assert r.json()["config"]["CHUNKED_SUMMARY"] is False
+        with open(os.environ["CONFIG_FILE"]) as f:
+            saved = _json.load(f)
+        assert saved["MODE"] == "original"
+        assert saved["CHUNKED_SUMMARY"] is False
+
+        html = client.get("/admin", headers=_basic()).text
+        assert "Original (pass through)" in html
+        assert "Original (no changes)" not in html
+    finally:
+        for var in ("MODE", "RETURN_IMAGE_URLS", "CHUNKED_SUMMARY"):
+            os.environ.pop(var, None)
+
+
 def test_think_tags_stripped():
     from app.summarizer import clean_summary
 
@@ -851,10 +893,11 @@ def test_original_mode_returns_raw_text_without_llm():
         os.environ.pop("MODE", None)
 
 
-def test_return_image_urls_appended_as_text():
+def test_return_image_urls_forced_off_in_original_mode():
+    """Original (pass through) + image URLs are incompatible: body stays verbatim."""
     import os
 
-    client, _ = _client(
+    client, cfg = _client(
         EXA_API_KEY="test-exa",
         PROXY_API_KEY="",
         LLM_BASE_URL="http://llm:8005/v1",
@@ -864,6 +907,7 @@ def test_return_image_urls_appended_as_text():
         ADMIN_PASS="admin",
     )
     try:
+        assert cfg.RETURN_IMAGE_URLS is False  # forced off at load
         with respx.mock:
             respx.post("https://api.exa.ai/search").mock(
                 return_value=Response(
@@ -883,12 +927,9 @@ def test_return_image_urls_appended_as_text():
             r = client.post("/debug/search", json={"query": "q", "count": 1}, headers=_basic())
         assert r.status_code == 200
         item = r.json()["results"][0]
-        assert "https://img.example.com/cover.jpg" in item["snippet"]
-        assert "https://img.example.com/inline.png" in item["snippet"]
-        assert item["image_urls"] == [
-            "https://img.example.com/cover.jpg",
-            "https://img.example.com/inline.png",
-        ]
+        assert item["snippet"] == "Body with ![alt](https://img.example.com/inline.png) pic."
+        assert "Images on page" not in item["snippet"]
+        assert item["image_urls"] == []
     finally:
         os.environ.pop("MODE", None)
         os.environ.pop("RETURN_IMAGE_URLS", None)

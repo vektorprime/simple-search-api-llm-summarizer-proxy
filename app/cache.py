@@ -426,6 +426,7 @@ def get_fresh(key: str) -> list[dict] | None:
             created = float(e.get("created_at", 0))
         except (TypeError, ValueError):
             store.pop(key, None)
+            _delete_row_locked(key)
             _misses += 1
             return None
         now = time.time()
@@ -443,8 +444,16 @@ def get_fresh(key: str) -> list[dict] | None:
             _misses += 1
             return None
         # Stale window: not a fresh hit; caller must revalidate via get_stale.
-        _misses += 1
+        # Not counted here: the caller records either a revalidated hit
+        # (refresh) or a miss (record_miss), so each request counts once.
         return None
+
+
+def record_miss() -> None:
+    """Count a stale-window entry whose revalidation failed as one miss."""
+    global _misses
+    with _lock:
+        _misses += 1
 
 
 def get_stale(key: str) -> dict | None:
