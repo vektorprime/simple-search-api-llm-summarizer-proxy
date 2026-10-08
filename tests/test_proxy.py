@@ -37,15 +37,6 @@ def _basic(user="admin", pw="admin"):
     return {"Authorization": f"Basic {tok}"}
 
 
-@pytest.fixture(autouse=True)
-def _isolate_config_file(tmp_path, monkeypatch):
-    """Keep tests independent of ./config.json / ./.env in the working directory."""
-    import os as _os
-
-    if "CONFIG_FILE" not in _os.environ:
-        monkeypatch.setenv("CONFIG_FILE", str(tmp_path / "nonexistent.json"))
-
-
 def test_search_happy_path_summarized():
     client, _ = _client(
         EXA_API_KEY="test-exa",
@@ -795,7 +786,7 @@ def _reload_config():
     return cfg
 
 
-def test_config_file_values_load_and_env_wins(tmp_path):
+def test_config_file_values_load_and_beat_env(tmp_path):
     import json as _json
     import os
 
@@ -809,13 +800,16 @@ def test_config_file_values_load_and_env_wins(tmp_path):
         assert cfg.LLM_MODEL == "file-model"
         assert cfg.LLM_TIMEOUT_SEC == 111
         os.environ["LLM_MODEL"] = "env-model"
+        os.environ["LLM_MAX_TOKENS"] = "1234"
         cfg = _reload_config()
-        assert cfg.LLM_MODEL == "env-model"  # env beats file
+        assert cfg.LLM_MODEL == "file-model"  # saved file value beats env
         assert cfg.LLM_TIMEOUT_SEC == 111
+        assert cfg.LLM_MAX_TOKENS == 1234  # env still seeds keys not in the file
     finally:
         os.environ.pop("CONFIG_FILE", None)
         os.environ.pop("LLM_MODEL", None)
         os.environ.pop("LLM_TIMEOUT_SEC", None)
+        os.environ.pop("LLM_MAX_TOKENS", None)
         _reload_config()
 
 

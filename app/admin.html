@@ -51,7 +51,6 @@ button.ghost{background:#fff;border-color:var(--line);color:var(--ink)}
 button.ghost:hover{background:#f1f5f9}
 button.small{padding:.35rem .8rem;font-size:.85rem}
 #credwarn{background:var(--err-bg);color:var(--err-ink);border:1px solid var(--err-line);border-radius:8px;padding:.6rem .9rem;margin-bottom:1rem;font-size:.9rem}
-.field .envlock{font-size:.78rem;color:var(--err-ink);margin-top:.25rem}
 #msg{flex:1;font-size:.88rem;border-radius:8px;padding:.5rem .8rem;display:none}
 #msg.show{display:block}
 #msg.ok{background:var(--ok-bg);color:var(--ok-ink);border:1px solid var(--ok-line)}
@@ -224,7 +223,6 @@ async function health(){
 
 function buildForm(cfg){
   const meta0 = cfg._meta || {};
-  const envLocked = meta0.env_locked || [];
   document.getElementById('credwarn').hidden = !meta0.default_admin_creds;
   const host = document.getElementById('form'); host.innerHTML = '';
   GROUPS.forEach(g => {
@@ -303,11 +301,6 @@ function buildForm(cfg){
         wrap.appendChild(det);
       }
       if(meta.hint){ const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = meta.hint; wrap.appendChild(hint); }
-      if(envLocked.includes(key)){
-        const lock = document.createElement('div'); lock.className = 'envlock';
-        lock.textContent = 'Set by environment (.env / compose): a change here applies now but reverts on restart. Edit .env to make it permanent.';
-        wrap.appendChild(lock);
-      }
       if(meta.mini){
         (miniGroups[meta.mini] = miniGroups[meta.mini] || []).push(wrap);
       } else {
@@ -389,9 +382,7 @@ async function save(){
     const applied = data.applied || [];
     await load(false);
     // re-mask secret inputs after rebuild
-    const locked = data.env_locked || [];
-    if(applied.length) say(locked.length ? 'info' : 'ok', 'Saved — applied: ' + applied.join(', ') + '.' +
-      (locked.length ? ' Note: ' + locked.join(', ') + ' also set in the environment — will revert on restart unless changed in .env.' : ''));
+    if(applied.length) say('ok', 'Saved — applied: ' + applied.join(', ') + '.');
     else say('info', 'Saved — no changes (values identical or secrets left empty).');
   }catch(e){ say('err', 'Save failed: ' + e.message); }
   finally{ setBusy(false); }

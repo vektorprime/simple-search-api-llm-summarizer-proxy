@@ -213,14 +213,21 @@ def test_invalid_numbers_rejected_all_or_nothing(monkeypatch):
     assert cfg.REQUEST_TIMEOUT_SEC == 1200 and cfg.LLM_MODEL != "m2"
 
 
-def test_env_locked_fields_and_default_creds_reported(monkeypatch):
-    client, _, _, _ = _client(monkeypatch, LLM_MODEL="from-env")
-    meta = client.get("/config", headers=_basic()).json()["_meta"]
-    assert "LLM_MODEL" in meta["env_locked"] and "MODE" not in meta["env_locked"]
-    assert meta["default_admin_creds"] is True
-    r = client.post("/config", json={"LLM_MODEL": "x", "MODE": "summary"}, headers=_basic())
-    assert r.json()["env_locked"] == ["LLM_MODEL"]
-    monkeypatch.delenv("LLM_MODEL")
+def test_admin_save_beats_environment_after_restart(monkeypatch):
+    # env seeds a value the config file does not hold yet...
+    client, cfg, _, _ = _client(monkeypatch, LLM_MODEL="from-env")
+    assert cfg.LLM_MODEL == "from-env"
+    # ...an admin save wins, and survives a restart with the env var still set
+    assert client.post("/config", json={"LLM_MODEL": "from-ui"}, headers=_basic()).status_code == 200
+    _, cfg, _, _ = _client(monkeypatch)  # reload = restart
+    assert os.environ["LLM_MODEL"] == "from-env" and cfg.LLM_MODEL == "from-ui"
+    # keys never saved in the file still come from the environment
+    assert cfg.EXA_API_KEY == "k"
+
+
+def test_default_creds_reported(monkeypatch):
+    client, _, _, _ = _client(monkeypatch)
+    assert client.get("/config", headers=_basic()).json()["_meta"]["default_admin_creds"] is True
 
 
 # --- summary limiter -----------------------------------------------------------

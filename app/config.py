@@ -1,8 +1,10 @@
-"""Layered configuration: built-in defaults < config file < environment.
+"""Layered configuration: built-in defaults < environment < config file.
 
 The config file (JSON, default ./config.json, override with CONFIG_FILE)
-survives restarts — the admin UI writes every change there. Environment
-variables always win, so docker -e / compose values still override.
+survives restarts — the admin UI writes every change there, and a value
+saved there always wins. Environment variables (docker -e / compose /
+.env) only seed settings the config file does not hold yet, so an
+admin-UI change is never reverted by the environment on restart.
 If no JSON file exists yet, a legacy .env file in the working directory
 is read once as the starting point (not written back).
 """
@@ -45,10 +47,10 @@ _FILE_VALUES: dict = _load_file_values()
 
 
 def _raw(name: str) -> str | None:
-    if name in os.environ:
-        return os.environ[name]
     v = _FILE_VALUES.get(name)
-    return str(v) if v is not None else None
+    if v is not None:
+        return str(v)
+    return os.environ.get(name)
 
 
 def _get(name: str, default: str = "") -> str:
@@ -272,15 +274,6 @@ def _mask(name: str, value: str) -> str:
     return value
 
 
-def env_locked_fields() -> list[str]:
-    """Editable fields also set in the environment.
-
-    Environment beats the config file at startup, so admin-UI edits to these
-    apply immediately but revert on the next restart.
-    """
-    return [name for name in EDITABLE_FIELDS if name in os.environ]
-
-
 def public_config() -> dict:
     """Current config for the admin UI (secrets masked)."""
     import sys
@@ -292,7 +285,6 @@ def public_config() -> dict:
         out[name] = _mask(name, str(val)) if isinstance(val, str) else val
     out["PORT"] = PORT
     out["_meta"] = {
-        "env_locked": env_locked_fields(),
         "default_admin_creds": ADMIN_USER == "admin" and ADMIN_PASS == "admin",
     }
     return out

@@ -430,7 +430,6 @@ async def post_config(req: Request, _: None = Depends(_check_admin_write)) -> JS
         _global_summary_sem().wake()  # a raised cap admits queued jobs now
     return JSONResponse(content={
         "applied": applied,
-        "env_locked": [k for k in applied if k in config.env_locked_fields()],
         "config": config.public_config(),
     })
 

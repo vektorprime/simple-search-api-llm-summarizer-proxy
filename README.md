@@ -6,8 +6,7 @@ that returns detailed LLM summaries in snippet instead of raw page text.
 Admin web UI included: open /admin on the running container
 (e.g. http://<YOUR SERVER IP>:8555/admin) — login admin / admin
 (change ADMIN_USER / ADMIN_PASS). Every setting below can be viewed,
-tested, and changed there; saves persist across restarts (except settings
-also set in the environment / `.env`, which win at startup — the UI flags those).
+tested, and changed there; saves persist across restarts.
 
 ```
 OpenWebUI                    SSALMP proxy               Search API + LLM
@@ -29,9 +28,8 @@ OpenAI-compatible LLM endpoint (llama.cpp, vLLM, or SGLang).
 
 ```bash
 cp .env.example .env
-# edit .env: set EXA_API_KEY and ADMIN_USER/ADMIN_PASS. Keys set in .env
-# override the admin UI on every restart, so leave the rest commented and
-# configure LLM_BASE_URL etc. in /admin (or uncomment to pin them).
+# edit .env: at minimum set EXA_API_KEY, LLM_BASE_URL and ADMIN_USER/ADMIN_PASS
+# (.env only seeds first-run values; anything saved in /admin wins after that)
 # NOTE (containers): LLM_BASE_URL must be reachable FROM the container —
 # 127.0.0.1 inside the container means the container itself, so use the
 # host LAN IP (e.g. http://10.0.0.187:8003/v1), never localhost.
@@ -94,11 +92,12 @@ API key in the same request, so a stored key is never redirected to a new host.
 
 ## Configuration
 
-Precedence: **built-in defaults < config file < environment variables**.
-Every change made in `/admin` is written to the config file immediately and
-survives restarts — unless the same key is also set in the environment
-(`.env` / compose), which wins again at the next start; the admin UI marks
-those fields:
+Precedence: **built-in defaults < environment variables < config file**.
+Environment / `.env` values seed any setting the config file does not hold
+yet. Every change made in `/admin` is written to the config file immediately,
+wins over the environment, and survives restarts. To make an env value
+authoritative again after saving that key in `/admin`, delete the key from
+the config file (`/data/config.json` in compose):
 
 | Var | Default | Notes |
 |---|---|---|
